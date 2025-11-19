@@ -1,0 +1,16 @@
+error: `mut` cannot come after the view
+  --> $DIR/invalid-mut-after-view.rs:9:27
+   |
+LL | fn invalid_param(_p: &{x} mut Point) {
+   |                           ^^^ unexpected `mut` here
+   |
+   = help: move `mut` before the view: `&mut {field} Type`
+
+error: `mut` cannot come after the view
+  --> $DIR/invalid-mut-after-view.rs:19:40
+   |
+LL |     fn invalid_method(&mut {mut value} mut self) {
+   |                                        ^^^
+
+error: aborting due to 2 previous errors
+

@@ -392,6 +392,14 @@ pub trait Visitor<'v>: Sized {
         walk_lifetime(self, lifetime)
     }
 
+    fn visit_view(&mut self, view: &'v View<'v>) -> Self::Result {
+        walk_view(self, view)
+    }
+
+    fn visit_view_field(&mut self, field: &'v ViewField<'v>) -> Self::Result {
+        walk_view_field(self, field)
+    }
+
     fn visit_expr(&mut self, ex: &'v Expr<'v>) -> Self::Result {
         walk_expr(self, ex)
     }
@@ -998,9 +1006,12 @@ pub fn walk_ty<'v, V: Visitor<'v>>(visitor: &mut V, typ: &'v Ty<'v, AmbigArg>) -
     match *kind {
         TyKind::Slice(ref ty) => try_visit!(visitor.visit_ty_unambig(ty)),
         TyKind::Ptr(ref mutable_type) => try_visit!(visitor.visit_ty_unambig(mutable_type.ty)),
-        TyKind::Ref(ref lifetime, ref mutable_type) => {
+        TyKind::Ref(ref lifetime, ref mutable_type, ref view) => {
             try_visit!(visitor.visit_lifetime(lifetime));
             try_visit!(visitor.visit_ty_unambig(mutable_type.ty));
+            if let Some(view) = view {
+                try_visit!(visitor.visit_view(view));
+            }
         }
         TyKind::Never => {}
         TyKind::Tup(tuple_element_types) => {
@@ -1405,6 +1416,20 @@ pub fn walk_lifetime<'v, V: Visitor<'v>>(visitor: &mut V, lifetime: &'v Lifetime
     let Lifetime { hir_id, ident, kind: _, source: _, syntax: _ } = lifetime;
     try_visit!(visitor.visit_id(*hir_id));
     visitor.visit_ident(*ident)
+}
+
+pub fn walk_view<'v, V: Visitor<'v>>(visitor: &mut V, view: &'v View<'v>) -> V::Result {
+    walk_list!(visitor, visit_view_field, view.fields);
+    V::Result::output()
+}
+
+pub fn walk_view_field<'v, V: Visitor<'v>>(visitor: &mut V, field: &'v ViewField<'v>) -> V::Result {
+    // Visit each symbol in the path.
+    for &symbol in field.path {
+        try_visit!(visitor.visit_name(symbol));
+    }
+    // Mutability has no nested structures to visit.
+    V::Result::output()
 }
 
 pub fn walk_qpath<'v, V: Visitor<'v>>(

@@ -604,7 +604,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeInfoCollector<'a, 'tcx> {
         let old_referenced_type_span = self.referenced_type_span;
 
         self.type_span = ty.span;
-        if let hir::TyKind::Ref(_, ty) = ty.kind {
+        if let hir::TyKind::Ref(_, ty, _) = ty.kind {
             self.referenced_type_span = Some(ty.ty.span);
         }
 

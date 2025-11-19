@@ -2333,7 +2333,7 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
         fn extract_node_id(t: &Ty) -> Option<NodeId> {
             match t.kind {
                 TyKind::Path(None, _) => Some(t.id),
-                TyKind::Ref(_, ref mut_ty) => extract_node_id(&mut_ty.ty),
+                TyKind::Ref(_, ref mut_ty, _) => extract_node_id(&mut_ty.ty),
                 // This doesn't handle the remaining `Ty` variants as they are not
                 // that commonly the self_type, it might be interesting to provide
                 // support for those in future.
@@ -3630,7 +3630,7 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
                                 .seen
                                 .iter()
                                 .filter_map(|ty| match &ty.kind {
-                                    TyKind::Ref(_, mut_ty) => {
+                                    TyKind::Ref(_, mut_ty, _) => {
                                         let span = ty.span.with_hi(mut_ty.ty.span.lo());
                                         Some((span, "&'a ".to_string()))
                                     }
@@ -3665,7 +3665,7 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
                                 LifetimeFinder { lifetime: lt.span, found: None, seen: vec![] };
                             lt_finder.visit_ty(&ty);
 
-                            if let [Ty { span, kind: TyKind::Ref(_, mut_ty), .. }] =
+                            if let [Ty { span, kind: TyKind::Ref(_, mut_ty, _), .. }] =
                                 &lt_finder.seen[..]
                             {
                                 // We might have a situation like
@@ -3862,7 +3862,7 @@ struct LifetimeFinder<'ast> {
 
 impl<'ast> Visitor<'ast> for LifetimeFinder<'ast> {
     fn visit_ty(&mut self, t: &'ast Ty) {
-        if let TyKind::Ref(_, mut_ty) | TyKind::PinnedRef(_, mut_ty) = &t.kind {
+        if let TyKind::Ref(_, mut_ty, _) | TyKind::PinnedRef(_, mut_ty) = &t.kind {
             self.seen.push(t);
             if t.span.lo() == self.lifetime.lo() {
                 self.found = Some(&mut_ty.ty);

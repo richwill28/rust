@@ -1641,7 +1641,7 @@ impl<'tcx> Liveness<'_, 'tcx> {
                 .iter()
                 .filter_map(|ty| {
                     if ty.span == *ty_span
-                        && let hir::TyKind::Ref(lt, mut_ty) = ty.kind
+                        && let hir::TyKind::Ref(lt, mut_ty, _) = ty.kind
                     {
                         Some((lt, mut_ty))
                     } else {

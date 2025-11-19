@@ -3114,6 +3114,61 @@ impl<'a> Parser<'a> {
             this.look_ahead(n, |token| token.is_ident_named(sym::pin))
                 && is_isolated_mut_self(this, n + 1)
         };
+        // Check if there's a view (like `{field1, field2}`) at position `n`
+        let has_view = |this: &Self, n| this.look_ahead(n, |t| t == &token::OpenBrace);
+        // Check for view followed by self
+        let is_view_self = |this: &Self, n| {
+            if !has_view(this, n) {
+                return false;
+            }
+            // The view should be a single delimited token tree at position n
+            this.tree_look_ahead(n, |t| {
+                matches!(t, TokenTree::Delimited(_, _, token::Delimiter::Brace, _))
+            }) == Some(true) && 
+            // After the delimited brace group, check for 'self' at the next tree position
+            this.tree_look_ahead(n + 1, |t| {
+                matches!(t, TokenTree::Token(token, _) if token.is_keyword(kw::SelfLower))
+            }).unwrap_or(false)
+        };
+        // Check for mut followed by view
+        let is_mut_view_self = |this: &Self, n| {
+            this.is_keyword_ahead(n, &[kw::Mut]) && is_view_self(this, n + 1)
+        };
+        // Check for view followed by mut self (like `{mut field} mut self`)
+        let is_view_mut_self = |this: &Self, n| {
+            if !has_view(this, n) {
+                return false;
+            }
+            // Look for delimited brace group followed by 'mut' then 'self'
+            this.tree_look_ahead(n, |t| {
+                matches!(t, TokenTree::Delimited(_, _, token::Delimiter::Brace, _))
+            }) == Some(true) && 
+            this.tree_look_ahead(n + 1, |t| {
+                matches!(t, TokenTree::Token(token, _) if token.is_keyword(kw::Mut))
+            }).unwrap_or(false) &&
+            this.tree_look_ahead(n + 2, |t| {
+                matches!(t, TokenTree::Token(token, _) if token.is_keyword(kw::SelfLower))
+            }).unwrap_or(false)
+        };
+        // Check for mut followed by view followed by mut self (like `mut {field} mut self`)
+        let is_mut_view_mut_self = |this: &Self, n| {
+            if !this.is_keyword_ahead(n, &[kw::Mut]) {
+                return false;
+            }
+            if !has_view(this, n + 1) {
+                return false;
+            }
+            // Look for 'mut' then delimited brace group followed by 'mut' then 'self'
+            this.tree_look_ahead(n + 1, |t| {
+                matches!(t, TokenTree::Delimited(_, _, token::Delimiter::Brace, _))
+            }) == Some(true) && 
+            this.tree_look_ahead(n + 2, |t| {
+                matches!(t, TokenTree::Token(token, _) if token.is_keyword(kw::Mut))
+            }).unwrap_or(false) &&
+            this.tree_look_ahead(n + 3, |t| {
+                matches!(t, TokenTree::Token(token, _) if token.is_keyword(kw::SelfLower))
+            }).unwrap_or(false)
+        };
         // Parse `self` or `self: TYPE`. We already know the current token is `self`.
         let parse_self_possibly_typed = |this: &mut Self, m| {
             let eself_ident = expect_self_ident(this);
@@ -3166,17 +3221,93 @@ impl<'a> Parser<'a> {
             token::And => {
                 let has_lifetime = is_lifetime(self, 1);
                 let skip_lifetime_count = has_lifetime as usize;
-                let eself = if is_isolated_self(self, skip_lifetime_count + 1) {
+                let eself = if is_view_self(self, skip_lifetime_count + 1) {
+                    // `&{'lt} {field1, field2} self`
+                    self.bump(); // &
+                    let lifetime = has_lifetime.then(|| self.expect_lifetime());
+                    let view = if self.eat(exp!(OpenBrace)) {
+                        match self.parse_view() {
+                            Ok(view) => Some(view),
+                            Err(mut err) => {
+                                err.span_label(self.token.span, "invalid view syntax in self parameter");
+                                err.help("view in self parameters specifies which fields to borrow: `&{field} self`");
+                                return Err(err);
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    SelfKind::Region(lifetime, Mutability::Not, view)
+                } else if is_mut_view_self(self, skip_lifetime_count + 1) {
+                    // `&{'lt} mut {field1, field2} self`
+                    self.bump(); // &
+                    let lifetime = has_lifetime.then(|| self.expect_lifetime());
+                    self.bump(); // mut
+                    let view = if self.eat(exp!(OpenBrace)) {
+                        match self.parse_view() {
+                            Ok(view) => Some(view),
+                            Err(mut err) => {
+                                err.span_label(self.token.span, "invalid view syntax in mutable self parameter");
+                                err.help("view in self parameters specifies which fields to borrow: `&mut {field} self`");
+                                return Err(err);
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    SelfKind::Region(lifetime, Mutability::Mut, view)
+                } else if is_view_mut_self(self, skip_lifetime_count + 1) || is_mut_view_mut_self(self, skip_lifetime_count + 1) {
+                    // Both `&{view} mut self` and `&mut {view} mut self` - invalid syntax
+                    // The fundamental issue is that `mut` cannot come after the view.
+                    // Emit a focused diagnostic and recover with a dummy parameter so
+                    // the outer parser won't try to re-parse this as a named parameter.
+                    self.bump(); // &
+                    let _lifetime = has_lifetime.then(|| self.expect_lifetime());
+                    // Skip the optional first `mut` (for `&mut {view} mut self` case).
+                    if self.check_keyword(exp!(Mut)) {
+                        self.bump();
+                    }
+                    // Parse the view to get better span information.
+                    if self.eat(exp!(OpenBrace)) {
+                        match self.parse_view() {
+                            Ok(_) => {},
+                            Err(err) => {
+                                err.cancel();
+                            }
+                        }
+                    }
+                    // Skip the trailing `mut` so the current token points at `self`.
+                    let mut_span = if self.check_keyword(exp!(Mut)) {
+                        let span = self.token.span;
+                        self.bump();
+                        span
+                    } else {
+                        // This shouldn't happen given our detection logic, but fallback to current token.
+                        self.token.span
+                    };
+                    let self_ident = if is_isolated_self(self, 0) {
+                        expect_self_ident(self)
+                    } else {
+                        Ident::new(kw::SelfLower, self.token.span)
+                    };
+                    let err = self.dcx().struct_span_err(
+                        mut_span,
+                        "`mut` cannot come after the view",
+                    );
+                    let guar = err.emit();
+                    // Create a dummy parameter to continue parsing.
+                    return Ok(Some(dummy_arg(self_ident, guar)));
+                } else if is_isolated_self(self, skip_lifetime_count + 1) {
                     // `&{'lt} self`
                     self.bump(); // &
                     let lifetime = has_lifetime.then(|| self.expect_lifetime());
-                    SelfKind::Region(lifetime, Mutability::Not)
+                    SelfKind::Region(lifetime, Mutability::Not, None)
                 } else if is_isolated_mut_self(self, skip_lifetime_count + 1) {
                     // `&{'lt} mut self`
                     self.bump(); // &
                     let lifetime = has_lifetime.then(|| self.expect_lifetime());
                     self.bump(); // mut
-                    SelfKind::Region(lifetime, Mutability::Mut)
+                    SelfKind::Region(lifetime, Mutability::Mut, None)
                 } else if is_isolated_pin_const_self(self, skip_lifetime_count + 1) {
                     // `&{'lt} pin const self`
                     self.bump(); // &

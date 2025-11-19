@@ -1,0 +1,33 @@
+error: view contains mutable fields but reference is not mutable
+  --> $DIR/mut-field-immut-ref-error.rs:8:30
+   |
+LL | fn mut_field_in_immut_ref(p: &{mut x} Point) {
+   |                              ^^^^^^^^^^^^^^ view with mutable fields
+   |
+   = note: field `x` is marked as mutable in the view
+   = help: change the reference to `&mut` to allow mutable access to fields
+   = note: views that grant mutable access to any field require a mutable reference
+
+error: view contains mutable fields but reference is not mutable
+  --> $DIR/mut-field-immut-ref-error.rs:12:34
+   |
+LL | fn mixed_mutability_immut_ref(p: &{x, mut y} Point) {
+   |                                  ^^^^^^^^^^^^^^^^^ view with mutable fields
+   |
+   = note: field `y` is marked as mutable in the view
+   = help: change the reference to `&mut` to allow mutable access to fields
+   = note: views that grant mutable access to any field require a mutable reference
+
+error: view contains mutable fields but reference is not mutable
+  --> $DIR/mut-field-immut-ref-error.rs:16:32
+   |
+LL | fn all_mut_fields_immut_ref(p: &{mut x, mut y} Point) {
+   |                                ^^^^^^^^^^^^^^^^^^^^^ view with mutable fields
+   |
+   = note: field `x` is marked as mutable in the view
+   = note: field `y` is marked as mutable in the view
+   = help: change the reference to `&mut` to allow mutable access to fields
+   = note: views that grant mutable access to any field require a mutable reference
+
+error: aborting due to 3 previous errors
+

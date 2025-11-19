@@ -256,7 +256,7 @@ fn type_trailing_braced_mac_call(mut ty: &ast::Ty) -> Option<&ast::MacCall> {
             }
 
             ast::TyKind::Ptr(mut_ty)
-            | ast::TyKind::Ref(_, mut_ty)
+            | ast::TyKind::Ref(_, mut_ty, _)
             | ast::TyKind::PinnedRef(_, mut_ty) => {
                 ty = &mut_ty.ty;
             }

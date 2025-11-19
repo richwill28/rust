@@ -126,6 +126,18 @@ pub(crate) struct FnCtxt<'a, 'tcx> {
     /// These are stored here so we may collect them when canonicalizing user
     /// type ascriptions later.
     pub(super) trait_ascriptions: RefCell<ItemLocalMap<Vec<ty::Clause<'tcx>>>>,
+
+    /// View constraints for function parameters in the current function.
+    ///
+    /// Maps from `HirId` of function parameters to the view constraint that applies.
+    /// This is populated when type-checking function parameters with explicit view
+    /// type annotations (e.g., `fn foo(p: &{x} Point)`).
+    ///
+    /// TODO: Currently only function parameters are supported. Future work:
+    /// - Support view types in let bindings: `let x: &{x} Point = ...;`.
+    /// - Support view types in expressions: `&{x} expr`.
+    /// - Think about view subtyping: Should `&{x, y} T` coerce to `&{x} T`?
+    pub(super) view_constraints: RefCell<hir::HirIdMap<crate::view_types::ViewConstraint<'tcx>>>,
 }
 
 impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
@@ -154,6 +166,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             diverging_fallback_behavior,
             diverging_block_behavior,
             trait_ascriptions: Default::default(),
+            view_constraints: RefCell::new(Default::default()),
         }
     }
 

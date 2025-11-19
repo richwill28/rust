@@ -651,7 +651,7 @@ impl Pat {
             PatKind::MacCall(mac) => TyKind::MacCall(mac.clone()),
             // `&mut? P` can be reinterpreted as `&mut? T` where `T` is `P` reparsed as a type.
             PatKind::Ref(pat, mutbl) => {
-                pat.to_ty().map(|ty| TyKind::Ref(None, MutTy { ty, mutbl: *mutbl }))?
+                pat.to_ty().map(|ty| TyKind::Ref(None, MutTy { ty, mutbl: *mutbl }, None))?
             }
             // A slice/array pattern `[P]` can be reparsed as `[T]`, an unsized array,
             // when `P` can be reparsed as a type `T`.
@@ -892,6 +892,18 @@ pub enum PatKind {
     /// A `deref` pattern (currently `deref!()` macro-based syntax).
     Deref(P<Pat>),
 
+    // TODO: Consider extending `Ref` patterns to support view types.
+    // This would enable view-aware pattern matching for safe handling of partial references.
+    // Potential use cases:
+    // - Match guards: `&{public_fields} user if user.is_active => process_public(user)`
+    // - Type-safe dispatch: `&{admin_data} admin => handle_admin(admin)`
+    // - View compatibility checking in match arms.
+    //
+    // Design considerations:
+    // 1. Should this extend `Ref(P<Pat>, Mutability)` or be a new `PatKind` variant?
+    // 2. How would pattern views interact with expression views?
+    // 3. Pattern must be compatible with the actual view type of the matched expression.
+    // 4. Would need to ensure exhaustiveness checking works with view constraints.
     /// A reference pattern (e.g., `&mut (a, b)`).
     Ref(P<Pat>, Mutability),
 
@@ -1478,7 +1490,7 @@ impl Expr {
             ExprKind::Paren(expr) => expr.to_ty().map(TyKind::Paren)?,
 
             ExprKind::AddrOf(BorrowKind::Ref, mutbl, expr) => {
-                expr.to_ty().map(|ty| TyKind::Ref(None, MutTy { ty, mutbl: *mutbl }))?
+                expr.to_ty().map(|ty| TyKind::Ref(None, MutTy { ty, mutbl: *mutbl }, None))?
             }
 
             ExprKind::Repeat(expr, expr_len) => {
@@ -1809,6 +1821,17 @@ pub enum ExprKind {
     /// Optionally "qualified" (e.g., `<Vec<T> as SomeTrait>::SomeType`).
     Path(Option<P<QSelf>>, Path),
 
+    // TODO: Consider extending `AddrOf` to support view types in expressions.
+    // This would enable syntax like `&{field1, field2} my_struct` in expression context,
+    // not just in function signatures. Potential use cases:
+    // - Partial borrowing in let bindings: `let partial_ref = &{x, y} my_struct;`
+    // - Passing partial references to functions: `process_data(&{field} obj)`
+    // - Method chaining on partial views: `partial_ref.method1().method2().transform()`
+    // 
+    // Design considerations:
+    // 1. Should this be a new ExprKind variant (e.g., `PartialAddrOf`) or extend `AddrOf`?
+    // 2. How would type inference work for view expressions?
+    // 3. How would this interact with method resolution and auto-deref?
     /// A referencing operation (`&a`, `&mut a`, `&raw const a` or `&raw mut a`).
     AddrOf(BorrowKind, Mutability, P<Expr>),
     /// A `break`, with an optional label to break, and an optional expression.
@@ -2276,6 +2299,35 @@ pub struct MutTy {
     pub mutbl: Mutability,
 }
 
+#[derive(Clone, Encodable, Decodable, Debug)]
+pub struct View {
+    pub fields: ThinVec<ViewField>,
+}
+
+#[derive(Clone, Encodable, Decodable, Debug)]
+pub struct ViewField {
+    pub path: Vec<Symbol>,
+    pub mutbl: Mutability,
+}
+
+impl<'a, V: crate::visit::Visitor<'a>> crate::visit::Visitable<'a, V> for View {
+    type Extra = ();
+    fn visit(&'a self, _visitor: &mut V, _extra: ()) -> V::Result {
+        use crate::visit::VisitorResult;
+        // `View` is a set of `ViewField`s, which contains only `Symbol` and `Mutability`, so there's nothing to visit.
+        V::Result::output()
+    }
+}
+
+impl<V: crate::mut_visit::MutVisitor> crate::mut_visit::MutVisitable<V> for View {
+    type Extra = ();
+    fn visit_mut(&mut self, _visitor: &mut V, _extra: ()) -> V::Result {
+        use crate::visit::VisitorResult;
+        // `View` is a set of `ViewField`s, which contains only `Symbol` and `Mutability`, so there's nothing to visit.
+        V::Result::output()
+    }
+}
+
 /// Represents a function's signature in a trait declaration,
 /// trait implementation, or free function.
 #[derive(Clone, Encodable, Decodable, Debug)]
@@ -2367,7 +2419,7 @@ impl From<P<Ty>> for Ty {
 impl Ty {
     pub fn peel_refs(&self) -> &Self {
         let mut final_ty = self;
-        while let TyKind::Ref(_, MutTy { ty, .. }) | TyKind::Ptr(MutTy { ty, .. }) = &final_ty.kind
+        while let TyKind::Ref(_, MutTy { ty, .. }, _) | TyKind::Ptr(MutTy { ty, .. }) = &final_ty.kind
         {
             final_ty = ty;
         }
@@ -2412,7 +2464,7 @@ pub enum TyKind {
     /// A raw pointer (`*const T` or `*mut T`).
     Ptr(MutTy),
     /// A reference (`&'a T` or `&'a mut T`).
-    Ref(#[visitable(extra = LifetimeCtxt::Ref)] Option<Lifetime>, MutTy),
+    Ref(#[visitable(extra = LifetimeCtxt::Ref)] Option<Lifetime>, MutTy, Option<View>),
     /// A pinned reference (`&'a pin const T` or `&'a pin mut T`).
     ///
     /// Desugars into `Pin<&'a T>` or `Pin<&'a mut T>`.
@@ -2821,8 +2873,13 @@ pub struct Param {
 pub enum SelfKind {
     /// `self`, `mut self`
     Value(Mutability),
-    /// `&'lt self`, `&'lt mut self`
-    Region(Option<Lifetime>, Mutability),
+    /// `&'lt {field, ..} self`, `&'lt mut {field, ..} self`
+    Region(Option<Lifetime>, Mutability, Option<View>),
+    // TODO: Consider adding view support to Pinned variant.
+    // This would enable syntax like `&pin {field1, field2} self` for pinned partial borrows.
+    // Questions to resolve:
+    // 1. Is there a valid use case for pinned view types?
+    // 2. How would this interact with the semantics of Pin?
     /// `&'lt pin const self`, `&'lt pin mut self`
     Pinned(Option<Lifetime>, Mutability),
     /// `self: TYPE`, `mut self: TYPE`
@@ -2832,8 +2889,10 @@ pub enum SelfKind {
 impl SelfKind {
     pub fn to_ref_suggestion(&self) -> String {
         match self {
-            SelfKind::Region(None, mutbl) => mutbl.ref_prefix_str().to_string(),
-            SelfKind::Region(Some(lt), mutbl) => format!("&{lt} {}", mutbl.prefix_str()),
+            // When suggesting a reference, we typically suggest the simplest form (without view constraints).
+            SelfKind::Region(None, mutbl, _) => mutbl.ref_prefix_str().to_string(),
+            // Ditto.
+            SelfKind::Region(Some(lt), mutbl, _) => format!("&{lt} {}", mutbl.prefix_str()),
             SelfKind::Pinned(None, mutbl) => format!("&pin {}", mutbl.ptr_str()),
             SelfKind::Pinned(Some(lt), mutbl) => format!("&{lt} pin {}", mutbl.ptr_str()),
             SelfKind::Value(_) | SelfKind::Explicit(_, _) => {
@@ -2852,8 +2911,8 @@ impl Param {
             if ident.name == kw::SelfLower {
                 return match self.ty.kind {
                     TyKind::ImplicitSelf => Some(respan(self.pat.span, SelfKind::Value(mutbl))),
-                    TyKind::Ref(lt, MutTy { ref ty, mutbl }) if ty.kind.is_implicit_self() => {
-                        Some(respan(self.pat.span, SelfKind::Region(lt, mutbl)))
+                    TyKind::Ref(lt, MutTy { ref ty, mutbl }, ref view) if ty.kind.is_implicit_self() => {
+                        Some(respan(self.pat.span, SelfKind::Region(lt, mutbl, view.clone())))
                     }
                     TyKind::PinnedRef(lt, MutTy { ref ty, mutbl })
                         if ty.kind.is_implicit_self() =>
@@ -2891,11 +2950,11 @@ impl Param {
         let (mutbl, ty) = match eself.node {
             SelfKind::Explicit(ty, mutbl) => (mutbl, ty),
             SelfKind::Value(mutbl) => (mutbl, infer_ty),
-            SelfKind::Region(lt, mutbl) => (
+            SelfKind::Region(lt, mutbl, view) => (
                 Mutability::Not,
                 P(Ty {
                     id: DUMMY_NODE_ID,
-                    kind: TyKind::Ref(lt, MutTy { ty: infer_ty, mutbl }),
+                    kind: TyKind::Ref(lt, MutTy { ty: infer_ty, mutbl }, view),
                     span,
                     tokens: None,
                 }),

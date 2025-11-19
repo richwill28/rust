@@ -1,0 +1,13 @@
+error: cannot access `x` on `value` because it is not a struct
+  --> $DIR/intermediate-field-not-struct-error.rs:12:33
+   |
+LL | fn intermediate_not_struct(c: &{value.x} Container) {
+   |                                 ^^^^^ not a struct field
+   |
+   = note: `value` has type `i32`, which does not support field access in views
+   = help: only struct types support nested field access in views
+   = note: while resolving view field path: `value.x`
+           the problematic component is: `value.x` (trying to access field `x` on non-struct `value`)
+
+error: aborting due to 1 previous error
+

@@ -37,6 +37,7 @@ mod place_op;
 mod rvalue_scopes;
 mod typeck_root_ctxt;
 mod upvar;
+mod view_types;
 mod writeback;
 
 pub use coercion::can_coerce;

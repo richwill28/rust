@@ -1853,6 +1853,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let ty = self.check_decl(local.into());
         self.write_ty(local.hir_id, ty);
+        
+        // TODO: Implement view constraint collection for let bindings.
+        // This would require:
+        // 1. Checking if `local.ty` has a view type annotation (e.g., `let x: &{field} T = ...`).
+        // 2. Collecting the view constraint similar to function parameters.
+        // 3. Verifying the initializer expression satisfies the view constraint.
+        // 4. Storing the constraint for subsequent field access checks on `x`.
         if local.pat.is_never_pattern() {
             self.diverges.set(Diverges::Always {
                 span: local.pat.span,

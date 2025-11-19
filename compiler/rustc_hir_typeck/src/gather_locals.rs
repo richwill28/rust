@@ -169,6 +169,12 @@ impl<'a, 'tcx> Visitor<'tcx> for GatherLocalsVisitor<'a, 'tcx> {
     // Add explicitly-declared locals.
     fn visit_local(&mut self, local: &'tcx hir::LetStmt<'tcx>) {
         self.declare(local.into());
+        // TODO: Collect view constraints from let bindings with view type annotations.
+        // When implemented, this should call `fcx.collect_view_constraint_from_local(local)`.
+        // Need to consider:
+        // - How view constraints flow from the initializer expression to the binding.
+        // - Whether `let x: &{x} Point = &{x, y} p` should be allowed (view narrowing).
+        // - Interaction with type inference when no type annotation is present.
         intravisit::walk_local(self, local)
     }
 

@@ -1,0 +1,26 @@
+error: field `inner.y` is not accessible through this view
+  --> $DIR/nested-field-access-not-in-view-error.rs:13:6
+   |
+LL | fn access_wrong_nested(o: &{inner.x} Outer) -> &i32 {
+   |                        ------------------- view defined here
+LL |     &o.inner.y
+   |      ^^^^^^^^^ field access not allowed by view
+   |
+   = note: the view on type `Outer` only allows access to specific field paths
+   = help: this view allows access to: inner.x
+   = note: you can access these fields and any of their subfields
+
+error: field `inner` is not accessible through this view
+  --> $DIR/nested-field-access-not-in-view-error.rs:18:6
+   |
+LL | fn access_parent_when_child_in_view(o: &{inner.x} Outer) -> &Inner {
+   |                                     ------------------- view defined here
+LL |     &o.inner
+   |      ^^^^^^^ field access not allowed by view
+   |
+   = note: the view on type `Outer` only allows access to specific field paths
+   = help: this view allows access to: inner.x
+   = note: you can access these fields and any of their subfields
+
+error: aborting due to 2 previous errors
+

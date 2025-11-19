@@ -412,7 +412,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                     let reason =
                         if let hir::LifetimeKind::ImplicitObjectLifetimeDefault = lifetime.kind {
                             if let hir::Node::Ty(hir::Ty {
-                                kind: hir::TyKind::Ref(parent_lifetime, _),
+                                kind: hir::TyKind::Ref(parent_lifetime, _, _),
                                 ..
                             }) = tcx.parent_hir_node(hir_id)
                                 && tcx.named_bound_var(parent_lifetime.hir_id).is_none()

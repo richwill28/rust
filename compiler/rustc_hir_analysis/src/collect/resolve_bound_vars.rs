@@ -796,13 +796,18 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
                     LifetimeKind::Error => {}
                 }
             }
-            hir::TyKind::Ref(lifetime_ref, ref mt) => {
+            hir::TyKind::Ref(lifetime_ref, ref mt, ref view) => {
                 self.visit_lifetime(lifetime_ref);
                 let scope = Scope::ObjectLifetimeDefault {
                     lifetime: self.rbv.defs.get(&lifetime_ref.hir_id.local_id).cloned(),
                     s: self.scope,
                 };
                 self.with(scope, |this| this.visit_ty_unambig(mt.ty));
+                if let Some(view) = view {
+                    // TODO: If views are extended to support per-field lifetimes in the future,
+                    // this visitor will need to be updated to properly resolve them.
+                    self.visit_view(view);
+                }
             }
             hir::TyKind::TraitAscription(bounds) => {
                 let scope = Scope::TraitRefBoundary { s: self.scope };

@@ -1,0 +1,26 @@
+error: only reference types to structs can be enriched with a view
+  --> $DIR/view-on-primitive-error.rs:3:19
+   |
+LL | fn view_on_i32(x: &{field} i32) {
+   |                   ^^^^^^^^^^^^ view not allowed here
+   |
+   = note: views can only be used with struct types
+
+error: only reference types to structs can be enriched with a view
+  --> $DIR/view-on-primitive-error.rs:7:19
+   |
+LL | fn view_on_str(s: &{field} str) {
+   |                   ^^^^^^^^^^^^ view not allowed here
+   |
+   = note: views can only be used with struct types
+
+error: only reference types to structs can be enriched with a view
+  --> $DIR/view-on-primitive-error.rs:11:21
+   |
+LL | fn view_on_slice(s: &{field} [i32]) {
+   |                     ^^^^^^^^^^^^^^ view not allowed here
+   |
+   = note: views can only be used with struct types
+
+error: aborting due to 3 previous errors
+

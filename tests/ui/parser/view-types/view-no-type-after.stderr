@@ -1,0 +1,8 @@
+error: expected type, found `)`
+  --> $DIR/view-no-type-after.rs:3:24
+   |
+LL | fn missing_type(p: &{x}) {
+   |                        ^ expected type
+
+error: aborting due to 1 previous error
+
