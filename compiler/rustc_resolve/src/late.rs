@@ -840,7 +840,13 @@ impl<'ast, 'ra, 'tcx> Visitor<'ast> for LateResolutionVisitor<'_, 'ast, 'ra, 'tc
         let prev = self.diag_metadata.current_trait_object;
         let prev_ty = self.diag_metadata.current_type_path;
         match &ty.kind {
-            TyKind::Ref(None, _) | TyKind::PinnedRef(None, _) => {
+            // TODO: This code correctly handles view types (e.g., `&{field1, field2} Type`) 
+            // as currently designed, since view types don't carry lifetime information - they
+            // only contain field paths and mutability. The elided lifetime applies to the 
+            // entire reference. However, if we ever extend view types with per-field lifetime
+            // annotations (e.g., `&{'a field1, 'b field2} Type`), this code will need to be
+            // modified to handle lifetime resolution for individual view fields.
+            TyKind::Ref(None, _, _) | TyKind::PinnedRef(None, _) => {
                 // Elided lifetime in reference: we resolve as if there was some lifetime `'_` with
                 // NodeId `ty.id`.
                 // This span will be used in case of elision failure.
@@ -1986,7 +1992,7 @@ impl<'a, 'ast, 'ra, 'tcx> LateResolutionVisitor<'a, 'ast, 'ra, 'tcx> {
                 type Result = ControlFlow<Span>;
 
                 fn visit_ty(&mut self, ty: &'ast ast::Ty) -> Self::Result {
-                    if let ast::TyKind::Ref(None, mut_ty) = &ty.kind {
+                    if let ast::TyKind::Ref(None, mut_ty, _) = &ty.kind {
                         return ControlFlow::Break(mut_ty.ty.span.shrink_to_lo());
                     }
                     visit::walk_ty(self, ty)
@@ -2490,7 +2496,7 @@ impl<'a, 'ast, 'ra, 'tcx> LateResolutionVisitor<'a, 'ast, 'ra, 'tcx> {
         impl<'ra> Visitor<'ra> for FindReferenceVisitor<'_, '_, '_> {
             fn visit_ty(&mut self, ty: &'ra Ty) {
                 trace!("FindReferenceVisitor considering ty={:?}", ty);
-                if let TyKind::Ref(lt, _) | TyKind::PinnedRef(lt, _) = ty.kind {
+                if let TyKind::Ref(lt, _, _) | TyKind::PinnedRef(lt, _) = ty.kind {
                     // See if anything inside the &thing contains Self
                     let mut visitor =
                         SelfVisitor { r: self.r, impl_self: self.impl_self, self_found: false };

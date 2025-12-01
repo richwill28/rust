@@ -1,0 +1,26 @@
+error: field `y` is not accessible through this view
+  --> $DIR/field-access-not-in-view-error.rs:9:6
+   |
+LL | fn access_outside_view(p: &{x} Point) -> &i32 {
+   |                        ------------- view defined here
+LL |     &p.y
+   |      ^^^ field access not allowed by view
+   |
+   = note: the view on type `Point` only allows access to specific field paths
+   = help: this view allows access to: x
+   = note: you can access these fields and any of their subfields
+
+error: field `y` is not accessible through this view
+  --> $DIR/field-access-not-in-view-error.rs:14:13
+   |
+LL | fn access_multiple_outside(p: &{x} Point) -> (&i32, &i32) {
+   |                            ------------- view defined here
+LL |     (&p.x, &p.y)
+   |             ^^^ field access not allowed by view
+   |
+   = note: the view on type `Point` only allows access to specific field paths
+   = help: this view allows access to: x
+   = note: you can access these fields and any of their subfields
+
+error: aborting due to 2 previous errors
+

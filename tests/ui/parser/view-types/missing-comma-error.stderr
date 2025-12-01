@@ -1,0 +1,20 @@
+error: expected `,` or `}` in view
+  --> $DIR/missing-comma-error.rs:9:25
+   |
+LL | fn missing_comma(p: &{x y} Point) {
+   |                         ^
+   |                         |
+   |                         expected `,` or `}`
+   |                         help: add comma here: `,`
+
+error: expected `,` or `}` in view
+  --> $DIR/missing-comma-error.rs:13:34
+   |
+LL | fn missing_comma_three(p: &{x, y z} Point) {
+   |                                  ^
+   |                                  |
+   |                                  expected `,` or `}`
+   |                                  help: add comma here: `,`
+
+error: aborting due to 2 previous errors
+

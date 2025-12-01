@@ -2931,3 +2931,155 @@ fn non_pattern_whitespace() {
     assert_eq!(matches_codepattern("\u{205F}a   b", "ab"), false);
     assert_eq!(matches_codepattern("a  \u{3000}b", "ab"), false);
 }
+
+#[test]
+fn view_parsing_success() {
+    // Test that valid view syntax parses correctly in method signatures
+    create_default_session_globals_then(|| {
+        let valid_view_methods = [
+            "impl S { fn method(&{field} self) {} }",
+            "impl S { fn method(&{field1, field2} self) {} }",
+            "impl S { fn method(&{0} self) {} }",
+            "impl S { fn method(&{0, 1, 2} self) {} }",
+            "impl S { fn method(&{field, 0, other} self) {} }",
+            "impl S { fn method(&mut {field} self) {} }",
+            "impl S { fn method(&'a {field} self) {} }",
+            "impl S { fn method(&'a mut {field1, field2} self) {} }",
+        ];
+
+        for method_code in valid_view_methods {
+            let item = string_to_item(method_code.to_string()).unwrap();
+            // If parsing succeeds without panic, the view syntax is valid
+            assert!(matches!(item.kind, ast::ItemKind::Impl(..)));
+        }
+    });
+}
+
+/// Test harness specifically for view parsing errors in method signatures.
+fn test_view_error(code: &str, expected_error_messages: &[&str]) {
+    create_default_session_globals_then(|| {
+        let (dcx, source_map, output) = create_test_handler(OutputTheme::Ascii);
+        let psess = ParseSess::with_dcx(dcx, source_map);
+        let mut parser = string_to_parser(&psess, code.to_string());
+
+        // Try to parse the impl item
+        let _result = parser.parse_item(ForceCollect::No);
+
+        let bytes = output.lock().unwrap();
+        let actual_output = str::from_utf8(&bytes).unwrap();
+
+        println!("Actual output:\n{}", actual_output);
+
+        // Check that expected error messages appear in the output
+        // We don't require parsing to fail, just that diagnostics are emitted
+        for expected_msg in expected_error_messages {
+            assert!(
+                actual_output.contains(expected_msg),
+                "Expected error message '{}' not found in output:\n{}",
+                expected_msg,
+                actual_output
+            );
+        }
+    });
+}
+
+#[test]
+fn view_empty_error() {
+    test_view_error(
+        "impl S { fn method(&{} self) {} }",
+        &[
+            "empty view is not allowed",
+        ],
+    );
+}
+
+#[test]
+fn view_suffixed_integer_error() {
+    test_view_error(
+        "impl S { fn method(&{0u32} self) {} }",
+        &[
+            "tuple indices in the view cannot have type suffixes",
+            "remove the type suffix",
+        ],
+    );
+}
+
+#[test]
+fn view_negative_integer_error() {
+    test_view_error(
+        "impl S { fn method(&{-1} self) {} }",
+        &[
+            "expected field name or tuple index in view",
+        ],
+    );
+}
+
+#[test]
+fn view_struct_literal_confusion() {
+    test_view_error(
+        "impl S { fn method(&{field: value} self) {} }",
+        &[
+            "expected `,` or `}` in view",
+        ],
+    );
+}
+
+#[test]
+fn view_trailing_dot_error() {
+    test_view_error(
+        "impl S { fn method(&{field.} self) {} }",
+        &[
+            "expected field name or tuple index after '.' in view path",
+        ],
+    );
+}
+
+#[test]
+fn view_assignment_confusion() {
+    test_view_error(
+        "impl S { fn method(&{field = value} self) {} }",
+        &[
+            "expected `,` or `}` in view",
+        ],
+    );
+}
+
+#[test]
+fn view_string_literal_confusion() {
+    test_view_error(
+        "impl S { fn method(&{\"field\"} self) {} }",
+        &[
+            "expected field name or tuple index in view",
+        ],
+    );
+}
+
+#[test]
+fn view_missing_comma_error() {
+    test_view_error(
+        "impl S { fn method(&{field1 field2} self) {} }",
+        &[
+            "expected `,` or `}` in view",
+        ],
+    );
+}
+
+#[test]
+fn view_char_literal_error() {
+    test_view_error(
+        "impl S { fn method(&{'a'} self) {} }",
+        &[
+            "expected field name or tuple index in view",
+        ],
+    );
+}
+
+#[test]
+fn view_double_brace_error() {
+    test_view_error(
+        "impl S { fn method(&{{field}} self) {} }",
+        &[
+            "expected field name or tuple index in view",
+        ],
+    );
+}

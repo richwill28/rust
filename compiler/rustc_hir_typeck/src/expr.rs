@@ -674,6 +674,29 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Expectation<'tcx>,
         expr: &'tcx hir::Expr<'tcx>,
     ) -> Ty<'tcx> {
+        // TODO: Support view types in borrow expressions.
+        //
+        // Currently, view types only work in function parameters:
+        //   fn foo(p: &{x} Point) { p.x; }  // OK
+        //
+        // We want to support them in borrow expressions:
+        //   let p: &Point = ...;
+        //   let q = &{x} *p;  // Create a reference that only allows accessing field x
+        //   q.x;              // OK
+        //   q.y;              // ERROR: field y not in view
+        //
+        // Implementation tasks:
+        //
+        // 1. **Check for view annotation**: Determine whether this borrow expression has
+        //    a view constraint (the `{x}` part in `&{x} *p`).
+        // 2. **Extract and validate the view**: Get the list of field identifiers from the
+        //    view annotation. Type-check the operand to determine its type, then validate
+        //    that all specified fields exist in that type's definition.
+        // 3. **Return the appropriate type**: Construct and return a type that captures
+        //    the reference with its view constraint. This type will be used during field
+        //    access checking to enforce the view restriction.
+        // 4. **View subtyping/coercion**: Should `&{x, y} T` be usable where `&{x} T` is
+        //    expected? This would be analogous to how `&mut T` can coerce to `&T`.
         let hint = expected.only_has_type(self).map_or(NoExpectation, |ty| {
             match self.try_structurally_resolve_type(expr.span, ty).kind() {
                 ty::Ref(_, ty, _) | ty::RawPtr(ty, _) => {
@@ -693,6 +716,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self.check_expr_with_expectation_and_needs(oprnd, hint, Needs::maybe_mut_place(mutbl));
         if let Err(guar) = ty.error_reported() {
             return Ty::new_error(self.tcx, guar);
+        }
+
+        // Check view constraints on field accesses in the operand.
+        if let hir::ExprKind::Field(..) = oprnd.kind {
+            if let Err(guar) = self.check_field_access_satisfies_view(oprnd) {
+                return Ty::new_error(self.tcx, guar);
+            }
         }
 
         match kind {
@@ -1168,6 +1198,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let ret_ty = ret_coercion.borrow().expected_ty();
         let return_expr_ty = self.check_expr_with_hint(return_expr, ret_ty);
+        // TODO: If the return type has a view constraint, verify that `return_expr` satisfies it.
+        // This should check that the returned expression only exposes the fields allowed by the view.
         let mut span = return_expr.span;
         let mut hir_id = return_expr.hir_id;
         // Use the span of the trailing expression for our cause,

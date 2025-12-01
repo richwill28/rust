@@ -376,6 +376,23 @@ impl<'a> State<'a> {
         }
     }
 
+    fn print_view(&mut self, view: &hir::View<'_>) {
+        self.word("{");
+        self.commasep(Inconsistent, view.fields, |s, field| {
+            s.print_view_field(field);
+        });
+        self.word("}");
+    }
+
+    fn print_view_field(&mut self, field: &hir::ViewField<'_>) {
+        if field.mutbl == hir::Mutability::Mut {
+            self.word_nbsp("mut");
+        }
+        self.strsep(".", false, Inconsistent, field.path, |s, &symbol| {
+            s.print_name(symbol);
+        });
+    }
+
     fn print_type(&mut self, ty: &hir::Ty<'_>) {
         self.maybe_print_comment(ty.span.lo());
         let ib = self.ibox(0);
@@ -389,10 +406,13 @@ impl<'a> State<'a> {
                 self.word("*");
                 self.print_mt(mt, true);
             }
-            hir::TyKind::Ref(lifetime, ref mt) => {
+            hir::TyKind::Ref(lifetime, ref mt, ref view) => {
                 self.word("&");
                 self.print_opt_lifetime(lifetime);
                 self.print_mt(mt, false);
+                if let Some(view) = view {
+                    self.print_view(view);
+                }
             }
             hir::TyKind::Never => {
                 self.word("!");

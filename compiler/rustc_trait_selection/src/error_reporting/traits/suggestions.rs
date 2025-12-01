@@ -1604,7 +1604,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         // Skipping binder here, remapping below
         let mut suggested_ty = trait_pred.self_ty().skip_binder();
         if let Some(mut hir_ty) = expr_finder.ty_result {
-            while let hir::TyKind::Ref(_, mut_ty) = &hir_ty.kind {
+            while let hir::TyKind::Ref(_, mut_ty, _) = &hir_ty.kind {
                 count += 1;
                 let span = hir_ty.span.until(mut_ty.ty.span);
                 suggestions.push((span, String::new()));
@@ -5238,7 +5238,7 @@ fn hint_missing_borrow<'tcx>(
                 let mut span = arg.span.shrink_to_lo();
                 let mut left = found_refs.len() - expected_refs.len();
                 let mut ty = arg;
-                while let hir::TyKind::Ref(_, mut_ty) = &ty.kind
+                while let hir::TyKind::Ref(_, mut_ty, _) = &ty.kind
                     && left > 0
                 {
                     span = span.with_hi(mut_ty.ty.span.lo());

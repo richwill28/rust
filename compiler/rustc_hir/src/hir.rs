@@ -3022,6 +3022,17 @@ pub struct MutTy<'hir> {
     pub mutbl: Mutability,
 }
 
+#[derive(Debug, Clone, Copy, HashStable_Generic)]
+pub struct View<'hir> {
+    pub fields: &'hir [ViewField<'hir>],
+}
+
+#[derive(Debug, Clone, Copy, HashStable_Generic)]
+pub struct ViewField<'hir> {
+    pub path: &'hir [Symbol],
+    pub mutbl: Mutability,
+}
+
 /// Represents a function's signature in a trait declaration,
 /// trait implementation, or a free function.
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
@@ -3354,7 +3365,7 @@ impl<'hir> Ty<'hir> {
 impl<'hir> Ty<'hir, AmbigArg> {
     pub fn peel_refs(&self) -> &Ty<'hir> {
         let mut final_ty = self.as_unambig_ty();
-        while let TyKind::Ref(_, MutTy { ty, .. }) = &final_ty.kind {
+        while let TyKind::Ref(_, MutTy { ty, .. }, _) = &final_ty.kind {
             final_ty = ty;
         }
         final_ty
@@ -3364,7 +3375,7 @@ impl<'hir> Ty<'hir, AmbigArg> {
 impl<'hir> Ty<'hir> {
     pub fn peel_refs(&self) -> &Self {
         let mut final_ty = self;
-        while let TyKind::Ref(_, MutTy { ty, .. }) = &final_ty.kind {
+        while let TyKind::Ref(_, MutTy { ty, .. }, _) = &final_ty.kind {
             final_ty = ty;
         }
         final_ty
@@ -3428,7 +3439,7 @@ impl<'hir> Ty<'hir> {
                 ty.is_suggestable_infer_ty() || matches!(length.kind, ConstArgKind::Infer(..))
             }
             TyKind::Tup(tys) => tys.iter().any(Self::is_suggestable_infer_ty),
-            TyKind::Ptr(mut_ty) | TyKind::Ref(_, mut_ty) => mut_ty.ty.is_suggestable_infer_ty(),
+            TyKind::Ptr(mut_ty) | TyKind::Ref(_, mut_ty, _) => mut_ty.ty.is_suggestable_infer_ty(),
             TyKind::Path(QPath::TypeRelative(ty, segment)) => {
                 ty.is_suggestable_infer_ty() || are_suggestable_generic_args(segment.args().args)
             }
@@ -3655,8 +3666,8 @@ pub enum TyKind<'hir, Unambig = ()> {
     Array(&'hir Ty<'hir>, &'hir ConstArg<'hir>),
     /// A raw pointer (i.e., `*const T` or `*mut T`).
     Ptr(MutTy<'hir>),
-    /// A reference (i.e., `&'a T` or `&'a mut T`).
-    Ref(&'hir Lifetime, MutTy<'hir>),
+    /// A reference (i.e., `&'a T` or `&'a mut T`), optionally with view (e.g., `&{field} T`).
+    Ref(&'hir Lifetime, MutTy<'hir>, Option<&'hir View<'hir>>),
     /// A function pointer (e.g., `fn(usize) -> bool`).
     FnPtr(&'hir FnPtrTy<'hir>),
     /// An unsafe binder type (e.g. `unsafe<'a> Foo<'a>`).
@@ -4968,8 +4979,9 @@ mod size_asserts {
     static_assert_size!(TraitImplHeader<'_>, 48);
     static_assert_size!(TraitItem<'_>, 88);
     static_assert_size!(TraitItemKind<'_>, 48);
-    static_assert_size!(Ty<'_>, 48);
-    static_assert_size!(TyKind<'_>, 32);
+    // TODO: Eventually we should revert the size of `Ty` and `TyKind` back to 48 and 32 bytes, respectively.
+    static_assert_size!(Ty<'_>, 56);
+    static_assert_size!(TyKind<'_>, 40);
     // tidy-alphabetical-end
 }
 

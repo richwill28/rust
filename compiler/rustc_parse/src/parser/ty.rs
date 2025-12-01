@@ -8,7 +8,7 @@ use rustc_ast::{
 };
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::{Applicability, Diag, PResult};
-use rustc_span::{ErrorGuaranteed, Ident, Span, kw, sym};
+use rustc_span::{ErrorGuaranteed, Ident, Span, Symbol, kw, sym};
 use thin_vec::{ThinVec, thin_vec};
 
 use super::{Parser, PathStyle, SeqSep, TokenType, Trailing};
@@ -18,6 +18,7 @@ use crate::errors::{
     HelpUseLatestEdition, InvalidCVariadicType, InvalidDynKeyword, LifetimeAfterMut,
     NeedPlusAfterTraitObjectLifetime, NestedCVariadicType, ReturnTypesUseThinArrow,
 };
+use crate::parser::expr::DestructuredFloat;
 use crate::parser::item::FrontMatterParsingMode;
 use crate::parser::{FnContext, FnParseMode};
 use crate::{exp, maybe_recover_from_interpolated_ty_qpath};
@@ -549,7 +550,7 @@ impl<'a> Parser<'a> {
                     Applicability::MaybeIncorrect,
                 );
                 err.emit();
-                Ok(TyKind::Ref(Some(lt), MutTy { ty, mutbl }))
+                Ok(TyKind::Ref(Some(lt), MutTy { ty, mutbl }, None))
             }
             Err(diag) => {
                 diag.cancel();
@@ -763,11 +764,234 @@ impl<'a> Parser<'a> {
             self.bump();
             self.bump_with((dyn_tok, dyn_tok_sp));
         }
+        // Parse optional view syntax like `{field1, field2}`
+        let view = if self.eat(exp!(OpenBrace)) {
+            match self.parse_view() {
+                Ok(view) => Some(view),
+                Err(err) => {
+                    return Err(err);
+                }
+            }
+        } else {
+            None
+        };
+        // Check for invalid `mut` after view (e.g., `&{field} mut Type`)
+        if view.is_some() && self.token.is_keyword(kw::Mut) {
+            let mut_span = self.token.span;
+            let mut err = self.dcx().struct_span_err(
+                mut_span,
+                "`mut` cannot come after the view",
+            );
+            err.span_label(mut_span, "unexpected `mut` here");
+            err.help("move `mut` before the view: `&mut {field} Type`");
+            return Err(err);
+        }
         let ty = self.parse_ty_no_plus()?;
         Ok(match pinned {
-            Pinnedness::Not => TyKind::Ref(opt_lifetime, MutTy { ty, mutbl }),
-            Pinnedness::Pinned => TyKind::PinnedRef(opt_lifetime, MutTy { ty, mutbl }),
+            Pinnedness::Not => TyKind::Ref(opt_lifetime, MutTy { ty, mutbl }, view),
+            Pinnedness::Pinned => {
+                // Check if user tried to use view with pinned reference
+                if view.is_some() {
+                    let mut err = self.dcx().struct_span_err(
+                        and_span,
+                        "view syntax is not supported with pinned references",
+                    );
+                    err.span_label(and_span, "combination of `pin` and view syntax is not yet implemented");
+                    err.help("remove either `pin` or the view syntax");
+                    return Err(err);
+                }
+                TyKind::PinnedRef(opt_lifetime, MutTy { ty, mutbl })
+            }
         })
+    }
+
+    // TODO: Look for more idiomatic way of emitting errors.
+    /// Parses a view syntax like `{field1, mut field2, nested.field}`.
+    /// The opening brace `{` is already consumed.
+    pub(crate) fn parse_view(&mut self) -> PResult<'a, ast::View> {
+        let open_brace_span = self.prev_token.span;
+        let mut fields = ThinVec::new();
+        let mut first_field = true;
+
+        // Handle empty view case.
+        if self.check(exp!(CloseBrace)) {
+            let empty_span = open_brace_span.to(self.token.span);
+            self.bump(); // consume closing brace.
+            return Err(self.dcx().struct_span_err(
+                empty_span,
+                "empty view is not allowed",
+            ).with_span_label(empty_span, "view must contain at least one field")
+            .with_help("specify which fields to borrow: `&{field} Type`"));
+        }
+
+        while !self.check(exp!(CloseBrace)) {
+            if !first_field {
+                // Expect comma between fields.
+                if !self.eat(exp!(Comma)) {
+                    let mut err = self.dcx().struct_span_err(
+                        self.token.span,
+                        "expected `,` or `}` in view",
+                    );
+                    err.span_label(self.token.span, "expected `,` or `}`");
+
+                    // Suggest adding comma if the next token looks like a field.
+                    if let token::Ident(..) = self.token.kind {
+                        err.span_suggestion(
+                            self.token.span.shrink_to_lo(),
+                            "add comma here",
+                            ", ",
+                            Applicability::MachineApplicable,
+                        );
+                    }
+                    return Err(err);
+                }
+            }
+            first_field = false;
+
+            // Skip any trailing comma before closing brace.
+            if self.check(exp!(CloseBrace)) {
+                break;
+            }
+
+            let mutbl = self.parse_mutability();
+
+            // Parse the field path (e.g., field, nested.field, 0, 1.2).
+            let mut path = Vec::new();
+
+            // Parse the first segment
+            self.parse_view_field_segment(&mut path, false)?;
+
+            // Parse additional segments separated by dots.
+            while self.eat(exp!(Dot)) {
+                self.parse_view_field_segment(&mut path, true)?;
+            }
+
+            fields.push(ast::ViewField { path, mutbl });
+        }
+
+        // Expect closing brace.
+        if !self.eat(exp!(CloseBrace)) {
+            let mut err = self.dcx().struct_span_err(
+                self.token.span,
+                "unclosed view",
+            );
+            err.span_label(self.token.span, "missing closing `}`");
+            err.span_label(open_brace_span, "view opened here");
+            err.span_suggestion(
+                self.token.span.shrink_to_lo(),
+                "add closing brace here",
+                "}",
+                Applicability::MachineApplicable,
+            );
+            return Err(err);
+        }
+
+        Ok(ast::View { fields })
+    }
+
+    /// Parse a single field segment (identifier or integer) in a view path.
+    fn parse_view_field_segment(&mut self, path: &mut Vec<Symbol>, is_after_dot: bool) -> PResult<'a, ()> {
+        if let token::Ident(name, _) = &self.token.kind {
+            // Check if this is a keyword - keywords are not valid field names in views
+            if self.token.is_used_keyword() || self.token.is_reserved_ident() {
+                return self.expected_field_error(is_after_dot, path.last().copied());
+            }
+            path.push(*name);
+            self.bump();
+            Ok(())
+        } else if let token::Literal(lit) = &self.token.kind {
+            match lit.kind {
+                // Handle numeric tuple field access like `0`, `1`, etc.
+                token::LitKind::Integer => {
+                    // Check for invalid suffixed integers like `0u32`, `42i64`.
+                    if lit.suffix.is_some() {
+                        let mut err = self.dcx().struct_span_err(
+                            self.token.span,
+                            "tuple indices in the view cannot have type suffixes",
+                        );
+                        err.span_label(self.token.span, "remove the type suffix");
+                        err.help("use bare integers like `0`, `1`, `2` for tuple indices");
+                        err.span_suggestion(
+                            self.token.span,
+                            "remove the suffix",
+                            lit.symbol.to_string(),
+                            Applicability::MachineApplicable,
+                        );
+                        return Err(err);
+                    }
+                    // Convert integer literal to symbol for storage.
+                    let field_name = rustc_span::Symbol::intern(&lit.symbol.to_string());
+                    path.push(field_name);
+                    self.bump();
+                    Ok(())
+                }
+                // Handle float literals like `1.0` which should be parsed as `1` `.` `0`.
+                // This happens when we have patterns like `data.1.0` where the lexer
+                // tokenizes `1.0` as a float instead of separate tokens.
+                token::LitKind::Float => {
+                    if lit.suffix.is_some() {
+                        // Float with suffix is definitely invalid.
+                        return self.expected_field_error(is_after_dot, path.last().copied());
+                    }
+                    // Try to break up the float into components.
+                    match self.break_up_float(lit.symbol, self.token.span) {
+                        DestructuredFloat::MiddleDot(left, _left_span, _dot_span, right, _right_span) => {
+                            // We have something like `1.0` - parse the left part as this segment,
+                            // then continue parsing will handle the dot and right part.
+                            path.push(left);
+                            // Replace current token with a dot token so the normal dot-parsing logic
+                            // in parse_view can continue. We need to manually insert the right part
+                            // back into the token stream somehow, but TokenCursor doesn't support that.
+                            // Instead, we'll consume the float token and manually parse the rest.
+                            self.bump(); // consume the float token
+                            // Now manually handle the dot and parse the right part.
+                            // We expect another segment after the dot.
+                            path.push(right);
+                            Ok(())
+                        }
+                        _ => {
+                            // Other float formats (trailing dot, single, error) are not valid
+                            // in view field paths.
+                            self.expected_field_error(is_after_dot, path.last().copied())
+                        }
+                    }
+                }
+                _ => self.expected_field_error(is_after_dot, None)
+            }
+        } else {
+            self.expected_field_error(is_after_dot, path.last().copied())
+        }
+    }
+
+    /// Generate an appropriate error message for when a field name or tuple index is expected.
+    fn expected_field_error(&mut self, is_after_dot: bool, field_context: Option<Symbol>) -> PResult<'a, ()> {
+        let (error_msg, context_msg) = if is_after_dot {
+            (
+                "expected field name or tuple index after '.' in view",
+                "paths in view use dot notation to access nested fields, like `{field.subfield}` or `{0.1}`"
+            )
+        } else {
+            (
+                "expected field name or tuple index in view",
+                "view specifies which fields or indices to borrow: `&{field, 0, 1.2} Type`"
+            )
+        };
+
+        let mut err = self.dcx().struct_span_err(self.token.span, error_msg);
+
+        if let Some(field_name) = field_context {
+            err.span_label(self.token.span, format!(
+                "expected field name or tuple index after '.' for `{}`", 
+                field_name.as_str()
+            ));
+        } else {
+            err.span_label(self.token.span, "expected a field identifier or numeric tuple index");
+        }
+
+        err.help("use field names like `field` or tuple indices like `0`, `1`");
+        err.note(context_msg);
+
+        Err(err)
     }
 
     /// Parses `pin` and `mut` annotations on references, patterns, or borrow modifiers.

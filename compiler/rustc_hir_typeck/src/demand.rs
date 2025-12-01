@@ -861,7 +861,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 .inputs
                 .iter()
                 .filter_map(|ty| match ty.kind {
-                    hir::TyKind::Ref(lt, mut_ty) if ty.span == *ty_span => Some((lt, mut_ty)),
+                    hir::TyKind::Ref(lt, mut_ty, _) if ty.span == *ty_span => Some((lt, mut_ty)),
                     _ => None,
                 })
                 .next()

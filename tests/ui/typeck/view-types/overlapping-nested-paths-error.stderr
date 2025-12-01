@@ -1,0 +1,22 @@
+error: view contains overlapping field paths
+  --> $DIR/overlapping-nested-paths-error.rs:11:22
+   |
+LL | fn prefix_overlap(o: &{inner, inner.value} Outer) {
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^ overlapping fields in view
+   |
+   = note: field `inner` is a prefix of `inner.value`
+   = help: remove either `inner` or `inner.value` from the view - they overlap
+   = note: all fields in a view must be disjoint (no field can be a prefix of another)
+
+error: view contains overlapping field paths
+  --> $DIR/overlapping-nested-paths-error.rs:15:30
+   |
+LL | fn prefix_overlap_reverse(o: &{inner.value, inner} Outer) {
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^ overlapping fields in view
+   |
+   = note: field `inner` is a prefix of `inner.value`
+   = help: remove either `inner` or `inner.value` from the view - they overlap
+   = note: all fields in a view must be disjoint (no field can be a prefix of another)
+
+error: aborting due to 2 previous errors
+

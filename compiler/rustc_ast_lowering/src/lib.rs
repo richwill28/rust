@@ -1301,13 +1301,14 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             TyKind::Err(guar) => hir::TyKind::Err(*guar),
             TyKind::Slice(ty) => hir::TyKind::Slice(self.lower_ty(ty, itctx)),
             TyKind::Ptr(mt) => hir::TyKind::Ptr(self.lower_mt(mt, itctx)),
-            TyKind::Ref(region, mt) => {
+            TyKind::Ref(region, mt, view) => {
                 let lifetime = self.lower_ty_direct_lifetime(t, *region);
-                hir::TyKind::Ref(lifetime, self.lower_mt(mt, itctx))
+                let lowered_view = view.as_ref().map(|v| self.lower_view(v));
+                hir::TyKind::Ref(lifetime, self.lower_mt(mt, itctx), lowered_view)
             }
             TyKind::PinnedRef(region, mt) => {
                 let lifetime = self.lower_ty_direct_lifetime(t, *region);
-                let kind = hir::TyKind::Ref(lifetime, self.lower_mt(mt, itctx));
+                let kind = hir::TyKind::Ref(lifetime, self.lower_mt(mt, itctx), None);
                 let span = self.lower_span(t.span);
                 let arg = hir::Ty { kind, span, hir_id: self.next_id() };
                 let args = self.arena.alloc(hir::GenericArgs {
@@ -1727,7 +1728,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     // Given we are only considering `ImplicitSelf` types, we needn't consider
                     // the case where we have a mutable pattern to a reference as that would
                     // no longer be an `ImplicitSelf`.
-                    TyKind::Ref(_, mt) | TyKind::PinnedRef(_, mt)
+                    TyKind::Ref(_, mt, _) | TyKind::PinnedRef(_, mt)
                         if mt.ty.kind.is_implicit_self() =>
                     {
                         match mt.mutbl {
@@ -2172,6 +2173,28 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
     fn lower_mt(&mut self, mt: &MutTy, itctx: ImplTraitContext) -> hir::MutTy<'hir> {
         hir::MutTy { ty: self.lower_ty(&mt.ty, itctx), mutbl: mt.mutbl }
+    }
+
+    fn lower_view(&mut self, view: &ast::View) -> &'hir hir::View<'hir> {
+        // We do not validate the well-formedness of view types during AST lowering, as the full
+        // type information is not yet available at this stage (AST -> HIR). Semantic validation
+        // will be performed during HIR analysis and type checking, where we can verify that:
+        // - The target type resolves to a struct or similar aggregate type.
+        // - All fields referenced in the view actually exist in the target type.
+        // - There are no duplicate field names within the view.
+        // - The view respects mutability constraints (e.g., no `mut` fields in immutable views).
+        // - Field visibility rules are properly enforced.
+        // This separation of concerns keeps the lowering phase focused on structural transformation
+        // while deferring semantic checks to the appropriate compiler phases.
+        let fields = self.arena.alloc_from_iter(
+            view.fields.iter().map(|field| self.lower_view_field(field))
+        );
+        self.arena.alloc(hir::View { fields })
+    }
+
+    fn lower_view_field(&mut self, field: &ast::ViewField) -> hir::ViewField<'hir> {
+        let path = self.arena.alloc_from_iter(field.path.iter().copied());
+        hir::ViewField { path, mutbl: field.mutbl }
     }
 
     #[instrument(level = "debug", skip(self), ret)]

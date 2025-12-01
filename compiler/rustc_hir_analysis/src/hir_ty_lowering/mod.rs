@@ -2456,10 +2456,19 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
             hir::TyKind::InferDelegation(_, idx) => self.lower_delegation_ty(*idx),
             hir::TyKind::Slice(ty) => Ty::new_slice(tcx, self.lower_ty(ty)),
             hir::TyKind::Ptr(mt) => Ty::new_ptr(tcx, self.lower_ty(mt.ty), mt.mutbl),
-            hir::TyKind::Ref(region, mt) => {
+            hir::TyKind::Ref(region, mt, _view) => {
                 let r = self.lower_lifetime(region, RegionInferReason::Reference);
                 debug!(?r);
                 let t = self.lower_ty(mt.ty);
+                // View constraints are not lowered into the core type system representation.
+                // Instead, view information remains in HIR and is used during type checking
+                // to enforce field access restrictions. This is a lightweight implementation
+                // strategy: during HIR type checking, we track active view constraints and
+                // validate field accesses against them. When we eventually implement borrow
+                // checking for views, we expect to query HIR for view information as needed
+                // rather than carrying view data through the entire type system. This approach
+                // avoids the complexity of integrating views into core types (Ty), variance
+                // computation, trait solving, and other type system mechanisms.
                 Ty::new_ref(tcx, r, t, mt.mutbl)
             }
             hir::TyKind::Never => tcx.types.never,

@@ -1791,7 +1791,10 @@ pub(crate) fn clean_ty<'tcx>(ty: &hir::Ty<'tcx>, cx: &mut DocContext<'tcx>) -> T
     match ty.kind {
         TyKind::Never => Primitive(PrimitiveType::Never),
         TyKind::Ptr(ref m) => RawPointer(m.mutbl, Box::new(clean_ty(m.ty, cx))),
-        TyKind::Ref(l, ref m) => {
+        TyKind::Ref(l, ref m, _view) => {
+            // TODO: Support view types in documentation. Views restrict which fields of a
+            // type can be accessed through a reference (e.g., `&{field} Type`). We should
+            // preserve and render this information in the cleaned AST.
             let lifetime = if l.is_anonymous() { None } else { Some(clean_lifetime(l, cx)) };
             BorrowedRef { lifetime, mutability: m.mutbl, type_: Box::new(clean_ty(m.ty, cx)) }
         }
