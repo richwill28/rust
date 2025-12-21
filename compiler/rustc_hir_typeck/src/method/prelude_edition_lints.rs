@@ -41,7 +41,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 if !span.at_least_rust_2024()
                     && let ty::Adt(adt_def, args) = self_ty.kind()
                     && self.tcx.is_lang_item(adt_def.did(), hir::LangItem::Pin)
-                    && let ty::Ref(_, _, ty::Mutability::Mut) =
+                    && let ty::Ref(_, _, ty::Mutability::Mut, _) =
                         args[0].as_type().unwrap().kind() =>
             {
                 (RUST_2024_PRELUDE_COLLISIONS, "2024")

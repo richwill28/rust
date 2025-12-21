@@ -397,7 +397,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 if borrow {
                     // Check for &self vs &mut self in the method signature. Since this is either
                     // the Fn or FnMut trait, it should be one of those.
-                    let ty::Ref(_, _, mutbl) = *method.sig.inputs()[0].kind() else {
+                    let ty::Ref(_, _, mutbl, view) = *method.sig.inputs()[0].kind() else {
                         bug!("Expected `FnMut`/`Fn` to take receiver by-ref/by-mut")
                     };
 
@@ -407,7 +407,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     let mutbl = AutoBorrowMutability::new(mutbl, AllowTwoPhase::No);
 
                     autoref = Some(Adjustment {
-                        kind: Adjust::Borrow(AutoBorrow::Ref(mutbl)),
+                        kind: Adjust::Borrow(AutoBorrow::Ref(mutbl, view)),
                         target: method.sig.inputs()[0],
                     });
                 }

@@ -605,7 +605,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
                 help: Some(fluent::lint_improper_ctypes_tuple_help),
             },
 
-            ty::RawPtr(ty, _) | ty::Ref(_, ty, _)
+            ty::RawPtr(ty, _) | ty::Ref(_, ty, _, _)
                 if {
                     (state.is_in_defined_function() || state.is_in_fnptr())
                         && ty.is_sized(self.cx.tcx, self.cx.typing_env())
@@ -623,7 +623,15 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
                 FfiSafe
             }
 
-            ty::RawPtr(ty, _) | ty::Ref(_, ty, _) => self.visit_type(state, ty),
+            ty::RawPtr(ty, _) => {
+                self.visit_type(state, ty)
+            }
+
+            ty::Ref(_, ty, _, _view) => {
+                // View is ignored. FFI safety depends on memory layout and ABI compatibility,
+                // not on Rust's compile-time access restrictions (such as mutability and view).
+                self.visit_type(state, ty)
+            }
 
             ty::Array(inner_ty, _) => self.visit_type(state, inner_ty),
 

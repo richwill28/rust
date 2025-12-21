@@ -135,7 +135,7 @@ impl<'tcx> InherentCollect<'tcx> {
             } else {
                 let span = self.tcx.def_span(impl_def_id);
                 let mut note = None;
-                if let ty::Ref(_, subty, _) = ty.kind() {
+                if let ty::Ref(_, subty, _, _) = ty.kind() {
                     note = Some(errors::InherentPrimitiveTyNote { subty: *subty });
                 }
                 return Err(self.tcx.dcx().emit_err(errors::InherentPrimitiveTy { span, note }));

@@ -246,7 +246,8 @@ impl<'a, 'tcx> Visitor<'tcx> for GatherBorrows<'a, 'tcx> {
         rvalue: &mir::Rvalue<'tcx>,
         location: mir::Location,
     ) {
-        if let &mir::Rvalue::Ref(region, kind, borrowed_place) = rvalue {
+        // TODO: Implement view types in borrowck.
+        if let &mir::Rvalue::Ref(region, kind, borrowed_place, _view) = rvalue {
             if borrowed_place.ignore_borrow(self.tcx, self.body, &self.locals_state_at_exit) {
                 debug!("ignoring_borrow of {:?}", borrowed_place);
                 return;
@@ -321,7 +322,8 @@ impl<'a, 'tcx> Visitor<'tcx> for GatherBorrows<'a, 'tcx> {
     }
 
     fn visit_rvalue(&mut self, rvalue: &mir::Rvalue<'tcx>, location: mir::Location) {
-        if let &mir::Rvalue::Ref(region, kind, place) = rvalue {
+        // TODO: Implement view types in borrowck.
+        if let &mir::Rvalue::Ref(region, kind, place, _view) = rvalue {
             // double-check that we already registered a BorrowData for this
 
             let borrow_data = &self.location_map[&location];

@@ -951,7 +951,8 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
 
             let ty = if local_decl.is_nonref_binding() {
                 local_decl.ty
-            } else if let &ty::Ref(_, rty, _) = local_decl.ty.kind() {
+                // TODO: Implement view types in borrowck.
+            } else if let &ty::Ref(_, rty, _, _view) = local_decl.ty.kind() {
                 // If we have a binding of the form `let ref x: T = ..`
                 // then remove the outermost reference so we can check the
                 // type annotation for the remaining type.
@@ -1552,7 +1553,8 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
                 }
             }
 
-            Rvalue::Ref(region, _borrow_kind, borrowed_place) => {
+            // TODO: Implement view types in borrowck.
+            Rvalue::Ref(region, _borrow_kind, borrowed_place, _view) => {
                 self.add_reborrow_constraint(location, *region, borrowed_place);
             }
 
@@ -2337,7 +2339,8 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
 
                     debug!("add_reborrow_constraint - base_ty = {:?}", base_ty);
                     match base_ty.kind() {
-                        ty::Ref(ref_region, _, mutbl) => {
+                        // TODO: Implement view types in borrowck.
+                        ty::Ref(ref_region, _, mutbl, _view) => {
                             constraints.outlives_constraints.push(OutlivesConstraint {
                                 sup: ref_region.as_var(),
                                 sub: borrow_region.as_var(),

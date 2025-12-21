@@ -17,7 +17,7 @@ use rustc_span::{DUMMY_SP, Span, Symbol, sym};
 use rustc_type_ir::TyKind::*;
 use rustc_type_ir::solve::SizedTraitKind;
 use rustc_type_ir::walk::TypeWalker;
-use rustc_type_ir::{self as ir, BoundVar, CollectAndApply, TypeVisitableExt, elaborate};
+use rustc_type_ir::{self as ir, BoundVar, CollectAndApply, TypeVisitableExt, VisitorResult, elaborate};
 use tracing::instrument;
 use ty::util::IntTypeExt;
 
@@ -39,6 +39,7 @@ pub type FnSig<'tcx> = ir::FnSig<TyCtxt<'tcx>>;
 pub type Binder<'tcx, T> = ir::Binder<TyCtxt<'tcx>, T>;
 pub type EarlyBinder<'tcx, T> = ir::EarlyBinder<TyCtxt<'tcx>, T>;
 pub type TypingMode<'tcx> = ir::TypingMode<TyCtxt<'tcx>>;
+pub type View<'tcx> = &'tcx List<ViewField<'tcx>>;
 
 pub trait Article {
     fn article(&self) -> &'static str;
@@ -380,6 +381,152 @@ impl ParamConst {
     }
 }
 
+/// A view field specifying which struct field is accessible and with what mutability.
+/// Used in view types like `&{field1, mut field2} T`.
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(HashStable)]
+pub struct ViewField<'tcx> {
+    /// The field path being accessed (e.g., `a.b.c` for nested field access).
+    pub path: &'tcx [Symbol],
+    /// The mutability of access to this field.
+    pub mutbl: rustc_ast_ir::Mutability,
+}
+
+impl<'tcx> ViewField<'tcx> {
+    pub fn new(path: &'tcx [Symbol], mutbl: rustc_ast_ir::Mutability) -> ViewField<'tcx> {
+        ViewField { path, mutbl }
+    }
+}
+
+impl std::fmt::Display for ViewField<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.mutbl.is_mut() {
+            write!(f, "mut ")?;
+        }
+        for (i, &sym) in self.path.iter().enumerate() {
+            if i > 0 {
+                write!(f, ".")?;
+            }
+            write!(f, "{}", sym)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'tcx, E: crate::ty::codec::TyEncoder<'tcx>> rustc_serialize::Encodable<E>
+    for ViewField<'tcx>
+{
+    fn encode(&self, e: &mut E) {
+        self.path.encode(e);
+        self.mutbl.encode(e);
+    }
+}
+
+impl<'tcx, D: crate::ty::codec::TyDecoder<'tcx>> rustc_serialize::Decodable<D>
+    for ViewField<'tcx>
+{
+    fn decode(d: &mut D) -> Self {
+        let path: Vec<Symbol> = rustc_serialize::Decodable::decode(d);
+        let path = d.interner().arena.alloc_slice(&path);
+        let mutbl = rustc_serialize::Decodable::decode(d);
+        ViewField { path, mutbl }
+    }
+}
+
+impl<'tcx> rustc_type_ir::TypeFoldable<TyCtxt<'tcx>> for ViewField<'tcx> {
+    fn try_fold_with<F: rustc_type_ir::FallibleTypeFolder<TyCtxt<'tcx>>>(
+        self,
+        _folder: &mut F,
+    ) -> Result<Self, F::Error> {
+        Ok(self)
+    }
+
+    fn fold_with<F: rustc_type_ir::TypeFolder<TyCtxt<'tcx>>>(
+        self,
+        _folder: &mut F,
+    ) -> Self {
+        self
+    }
+}
+
+impl<'tcx> rustc_type_ir::TypeVisitable<TyCtxt<'tcx>> for ViewField<'tcx> {
+    fn visit_with<V: rustc_type_ir::TypeVisitor<TyCtxt<'tcx>>>(
+        &self,
+        _visitor: &mut V,
+    ) -> V::Result {
+        V::Result::output()
+    }
+}
+
+/// Check if from_view is more permissive than to_view.
+/// A view is more permissive if it can be safely coerced to the target view.
+/// For each field in to_view, from_view must have a corresponding field with:
+/// - A path that is a prefix of (or equal to) the to_field's path.
+/// - Compatible mutability (from_field.mutbl >= to_field.mutbl).
+///
+/// For example:
+/// - `{field}` is more permissive than `{field.subfield}` (prefix relationship)
+/// - `{field}` is more permissive than `{field}` (exact match)
+/// - `{mut field}` is more permissive than `{field}` (mutability compatibility)
+pub fn is_view_more_permissive<'tcx>(from: View<'tcx>, to: View<'tcx>) -> bool {
+    to.iter().all(|to_field| {
+        from.iter().any(|from_field| {
+            to_field.path.starts_with(from_field.path) && from_field.mutbl >= to_field.mutbl
+        })
+    })
+}
+
+/// Construct a maximally permissive view for a given type.
+/// This represents what a normal reference (without a view) would provide:
+/// access to all top-level fields with the specified mutability.
+pub fn get_maximal_view<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    mutbl: hir::Mutability,
+) -> View<'tcx> {
+    match ty.kind() {
+        TyKind::Adt(def, _) if def.is_struct() => {
+            tcx.mk_view_fields_from_iter(def.all_fields().map(|field| ViewField {
+                path: tcx.arena.alloc_slice(&[field.name]),
+                mutbl,
+            }))
+        }
+        _ => List::empty(),
+    }
+}
+
+/// Check if two views are semantically equivalent.
+/// Two views are semantically equivalent if they grant the same permissions,
+/// meaning each is more permissive than the other (set-wise equality).
+/// Normal references (None) are treated as maximally permissive views.
+pub fn semantically_equivalent_view<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    a_view: Option<View<'tcx>>,
+    a_ty: Ty<'tcx>,
+    a_mutbl: hir::Mutability,
+    b_view: Option<View<'tcx>>,
+    b_ty: Ty<'tcx>,
+    b_mutbl: hir::Mutability,
+) -> bool {
+    match (a_view, b_view) {
+        (None, None) => true,
+        (Some(a_fields), None) => {
+            let b_maximal = get_maximal_view(tcx, b_ty, b_mutbl);
+            is_view_more_permissive(a_fields, b_maximal)
+                && is_view_more_permissive(b_maximal, a_fields)
+        }
+        (None, Some(b_fields)) => {
+            let a_maximal = get_maximal_view(tcx, a_ty, a_mutbl);
+            is_view_more_permissive(a_maximal, b_fields)
+                && is_view_more_permissive(b_fields, a_maximal)
+        }
+        (Some(a_fields), Some(b_fields)) => {
+            is_view_more_permissive(a_fields, b_fields)
+                && is_view_more_permissive(b_fields, a_fields)
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, TyEncodable, TyDecodable)]
 #[derive(HashStable)]
 pub struct BoundTy {
@@ -604,18 +751,19 @@ impl<'tcx> Ty<'tcx> {
         r: Region<'tcx>,
         ty: Ty<'tcx>,
         mutbl: ty::Mutability,
+        view: Option<View<'tcx>>,
     ) -> Ty<'tcx> {
-        Ty::new(tcx, Ref(r, ty, mutbl))
+        Ty::new(tcx, Ref(r, ty, mutbl, view))
     }
 
     #[inline]
     pub fn new_mut_ref(tcx: TyCtxt<'tcx>, r: Region<'tcx>, ty: Ty<'tcx>) -> Ty<'tcx> {
-        Ty::new_ref(tcx, r, ty, hir::Mutability::Mut)
+        Ty::new_ref(tcx, r, ty, hir::Mutability::Mut, None)
     }
 
     #[inline]
     pub fn new_imm_ref(tcx: TyCtxt<'tcx>, r: Region<'tcx>, ty: Ty<'tcx>) -> Ty<'tcx> {
-        Ty::new_ref(tcx, r, ty, hir::Mutability::Not)
+        Ty::new_ref(tcx, r, ty, hir::Mutability::Not, None)
     }
 
     pub fn new_pinned_ref(
@@ -625,7 +773,7 @@ impl<'tcx> Ty<'tcx> {
         mutbl: ty::Mutability,
     ) -> Ty<'tcx> {
         let pin = tcx.adt_def(tcx.require_lang_item(LangItem::Pin, DUMMY_SP));
-        Ty::new_adt(tcx, pin, tcx.mk_args(&[Ty::new_ref(tcx, r, ty, mutbl).into()]))
+        Ty::new_adt(tcx, pin, tcx.mk_args(&[Ty::new_ref(tcx, r, ty, mutbl, None).into()]))
     }
 
     #[inline]
@@ -1055,8 +1203,9 @@ impl<'tcx> rustc_type_ir::inherent::Ty<TyCtxt<'tcx>> for Ty<'tcx> {
         region: ty::Region<'tcx>,
         ty: Self,
         mutbl: hir::Mutability,
+        view: Option<View<'tcx>>,
     ) -> Self {
-        Ty::new_ref(interner, region, ty, mutbl)
+        Ty::new_ref(interner, region, ty, mutbl, view)
     }
 
     fn new_array_with_const_len(interner: TyCtxt<'tcx>, ty: Self, len: ty::Const<'tcx>) -> Self {
@@ -1239,7 +1388,7 @@ impl<'tcx> Ty<'tcx> {
     pub fn is_array_slice(self) -> bool {
         match self.kind() {
             Slice(_) => true,
-            ty::RawPtr(ty, _) | Ref(_, ty, _) => matches!(ty.kind(), Slice(_)),
+            ty::RawPtr(ty, _) | Ref(_, ty, _, _) => matches!(ty.kind(), Slice(_)),
             _ => false,
         }
     }
@@ -1290,14 +1439,14 @@ impl<'tcx> Ty<'tcx> {
 
     #[inline]
     pub fn is_mutable_ptr(self) -> bool {
-        matches!(self.kind(), RawPtr(_, hir::Mutability::Mut) | Ref(_, _, hir::Mutability::Mut))
+        matches!(self.kind(), RawPtr(_, hir::Mutability::Mut) | Ref(_, _, hir::Mutability::Mut, _))
     }
 
     /// Get the mutability of the reference or `None` when not a reference
     #[inline]
     pub fn ref_mutability(self) -> Option<hir::Mutability> {
         match self.kind() {
-            Ref(_, _, mutability) => Some(*mutability),
+            Ref(_, _, mutability, _) => Some(*mutability),
             _ => None,
         }
     }
@@ -1359,7 +1508,7 @@ impl<'tcx> Ty<'tcx> {
     pub fn pinned_ref(self) -> Option<(Ty<'tcx>, ty::Mutability)> {
         if let Adt(def, args) = self.kind()
             && def.is_pin()
-            && let &ty::Ref(_, ty, mutbl) = args.type_at(0).kind()
+            && let &ty::Ref(_, ty, mutbl, _) = args.type_at(0).kind()
         {
             return Some((ty, mutbl));
         }
@@ -1370,11 +1519,11 @@ impl<'tcx> Ty<'tcx> {
         match *self.kind() {
             Adt(def, args)
                 if def.is_pin()
-                    && let ty::Ref(_, ty, mutbl) = *args.type_at(0).kind() =>
+                    && let ty::Ref(_, ty, mutbl, _) = *args.type_at(0).kind() =>
             {
                 Some((ty, ty::Pinnedness::Pinned, mutbl))
             }
-            ty::Ref(_, ty, mutbl) => Some((ty, ty::Pinnedness::Not, mutbl)),
+            ty::Ref(_, ty, mutbl, _) => Some((ty, ty::Pinnedness::Not, mutbl)),
             _ => None,
         }
     }
@@ -1554,7 +1703,10 @@ impl<'tcx> Ty<'tcx> {
     pub fn builtin_deref(self, explicit: bool) -> Option<Ty<'tcx>> {
         match *self.kind() {
             _ if let Some(boxed) = self.boxed_ty() => Some(boxed),
-            Ref(_, ty, _) => Some(ty),
+            // The semantics of dereferencing a view-restricted reference is undefined.
+            // But we allow it here because this function is used to determine pointee
+            // types during type checking, where the view is not relevant.
+            Ref(_, ty, _, _) => Some(ty),
             RawPtr(ty, _) if explicit => Some(ty),
             _ => None,
         }
@@ -1970,11 +2122,11 @@ impl<'tcx> Ty<'tcx> {
             ty::FnPtr(..) => false,
 
             // Definitely absolutely not copy.
-            ty::Ref(_, _, hir::Mutability::Mut) => false,
+            ty::Ref(_, _, hir::Mutability::Mut, _) => false,
 
             // The standard library has a blanket Copy impl for shared references and raw pointers,
             // for all unsized types.
-            ty::Ref(_, _, hir::Mutability::Not) | ty::RawPtr(..) => true,
+            ty::Ref(_, _, hir::Mutability::Not, _) | ty::RawPtr(..) => true,
 
             ty::Coroutine(..) | ty::CoroutineWitness(..) => false,
 
@@ -2013,7 +2165,10 @@ impl<'tcx> Ty<'tcx> {
             ty::FnPtr(sig_tys, _) => {
                 sig_tys.skip_binder().inputs_and_output.iter().all(|ty| ty.is_trivially_wf(tcx))
             }
-            ty::Ref(_, ty, _) => ty.is_global() && ty.is_trivially_wf(tcx),
+
+            // Views are just metadata specifying which fields are accessible and have already
+            // been validated during type checking, so they don't affect well-formedness here.
+            ty::Ref(_, ty, _, _view) => ty.is_global() && ty.is_trivially_wf(tcx),
 
             ty::Infer(infer) => match infer {
                 ty::TyVar(_) => false,
@@ -2125,7 +2280,8 @@ mod size_asserts {
 
     use super::*;
     // tidy-alphabetical-start
-    static_assert_size!(TyKind<'_>, 24);
-    static_assert_size!(ty::WithCachedTypeInfo<TyKind<'_>>, 48);
+    // TODO: Eventually we should revert the size of `TyKind` and `WithCachedTypeInfo<TyKind>` back to 24 and 48 bytes, respectively.
+    static_assert_size!(TyKind<'_>, 32);
+    static_assert_size!(ty::WithCachedTypeInfo<TyKind<'_>>, 56);
     // tidy-alphabetical-end
 }

@@ -105,7 +105,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 let imm_borrow_derefed = self.upvars[upvar_index.index()]
                     .place
                     .deref_tys()
-                    .any(|ty| matches!(ty.kind(), ty::Ref(.., hir::Mutability::Not)));
+                    // TODO: Implement view types in borrowck.
+                    .any(|ty| matches!(ty.kind(), ty::Ref(.., hir::Mutability::Not, _)));
 
                 // If the place is immutable then:
                 //
@@ -324,6 +325,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                                 _,
                                 mir::BorrowKind::Mut { kind: mir::MutBorrowKind::Default },
                                 _,
+                                // TODO: Implement view types in borrowck.
+                                _view,
                             ),
                         )),
                     ..
@@ -464,7 +467,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 }
 
                 let tcx = self.infcx.tcx;
-                if let ty::Ref(_, ty, Mutability::Mut) = the_place_err.ty(self.body, tcx).ty.kind()
+                // TODO: Implement view types in borrowck.
+                if let ty::Ref(_, ty, Mutability::Mut, _view) = the_place_err.ty(self.body, tcx).ty.kind()
                     && let ty::Closure(id, _) = *ty.kind()
                 {
                     self.show_mutating_upvar(tcx, id.expect_local(), the_place_err, &mut err);
@@ -1537,7 +1541,8 @@ fn mut_borrow_of_mutable_ref(local_decl: &LocalDecl<'_>, local_name: Option<Symb
         LocalInfo::User(mir::BindingForm::Var(mir::VarBindingForm {
             binding_mode: BindingMode(ByRef::No, Mutability::Not),
             ..
-        })) => matches!(local_decl.ty.kind(), ty::Ref(_, _, hir::Mutability::Mut)),
+            // TODO: Implement view types in borrowck.
+        })) => matches!(local_decl.ty.kind(), ty::Ref(_, _, hir::Mutability::Mut, _)),
         LocalInfo::User(mir::BindingForm::ImplicitSelf(kind)) => {
             // Check if the user variable is a `&mut self` and we can therefore
             // suggest removing the `&mut`.
@@ -1550,7 +1555,8 @@ fn mut_borrow_of_mutable_ref(local_decl: &LocalDecl<'_>, local_name: Option<Symb
             // Otherwise, check if the name is the `self` keyword - in which case
             // we have an explicit self. Do the same thing in this case and check
             // for a `self: &mut Self` to suggest removing the `&mut`.
-            matches!(local_decl.ty.kind(), ty::Ref(_, _, hir::Mutability::Mut))
+            // TODO: Implement view types in borrowck.
+            matches!(local_decl.ty.kind(), ty::Ref(_, _, hir::Mutability::Mut, _))
         }
         _ => false,
     }
@@ -1625,7 +1631,8 @@ fn suggest_ampmut<'tcx>(
         // Take some special care when handling `let _x = &*_y`:
         // We want to know if this is part of an overloaded index, so `let x = &a[0]`,
         // or whether this is a usertype ascription (`let _x: &T = y`).
-        if let Rvalue::Ref(_, BorrowKind::Shared, place) = rvalue
+        // TODO: Implement view types in borrowck.
+        if let Rvalue::Ref(_, BorrowKind::Shared, place, _) = rvalue
             && place.projection.len() == 1
             && place.projection[0] == ProjectionElem::Deref
             && let Some(assign) = find_assignments(&body, place.local).first()
@@ -1681,7 +1688,8 @@ fn suggest_ampmut<'tcx>(
         }
 
         let sugg = match rvalue {
-            Rvalue::Ref(_, BorrowKind::Shared, _) if let Some(ref_idx) = rhs_str.find('&') => {
+            // TODO: Implement view types in borrowck.
+            Rvalue::Ref(_, BorrowKind::Shared, _, _) if let Some(ref_idx) = rhs_str.find('&') => {
                 // Shrink the span to just after the `&` in `&variable`.
                 Some((
                     rhs_span.with_lo(rhs_span.lo() + BytePos(ref_idx as u32 + 1)).shrink_to_lo(),
@@ -1727,7 +1735,8 @@ fn get_mut_span_in_struct_field<'tcx>(
     field: FieldIdx,
 ) -> Option<Span> {
     // Expect our local to be a reference to a struct of some kind.
-    if let ty::Ref(_, ty, _) = ty.kind()
+    // TODO: Implement view types in borrowck.
+    if let ty::Ref(_, ty, _, _view) = ty.kind()
         && let ty::Adt(def, _) = ty.kind()
         && let field = def.all_fields().nth(field.index())?
         // Now we're dealing with the actual struct that we're going to suggest a change to,

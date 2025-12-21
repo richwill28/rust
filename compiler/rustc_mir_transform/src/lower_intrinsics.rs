@@ -266,13 +266,14 @@ impl<'tcx> crate::MirPass<'tcx> for LowerIntrinsics {
                             ty::RawPtr(_, Mutability::Mut) => {
                                 Rvalue::RawPtr(RawPtrKind::Mut, updated_place)
                             }
-                            ty::Ref(region, _, Mutability::Not) => {
-                                Rvalue::Ref(region, BorrowKind::Shared, updated_place)
+                            ty::Ref(region, _, Mutability::Not, view) => {
+                                Rvalue::Ref(region, BorrowKind::Shared, updated_place, view)
                             }
-                            ty::Ref(region, _, Mutability::Mut) => Rvalue::Ref(
+                            ty::Ref(region, _, Mutability::Mut, view) => Rvalue::Ref(
                                 region,
                                 BorrowKind::Mut { kind: MutBorrowKind::Default },
                                 updated_place,
+                                view,
                             ),
                             _ => bug!("Unknown return type {ret_ty:?}"),
                         };

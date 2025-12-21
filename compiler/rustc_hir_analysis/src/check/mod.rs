@@ -457,7 +457,7 @@ fn fn_sig_suggestion<'tcx>(
         .map(|(i, ty)| {
             Some(match ty.kind() {
                 ty::Param(_) if assoc.is_method() && i == 0 => "self".to_string(),
-                ty::Ref(reg, ref_ty, mutability) if i == 0 => {
+                ty::Ref(reg, ref_ty, mutability, _) if i == 0 => {
                     let reg = format!("{reg} ");
                     let reg = match &reg[..] {
                         "'_ " | " " => "",

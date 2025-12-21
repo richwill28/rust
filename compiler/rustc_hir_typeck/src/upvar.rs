@@ -1840,10 +1840,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
                 // Dereferencing a mut-ref allows us to mut the Place if we don't deref
                 // an immut-ref after on top of this.
-                ty::Ref(.., hir::Mutability::Mut) => is_mutbl = hir::Mutability::Mut,
+                ty::Ref(.., hir::Mutability::Mut, _) => is_mutbl = hir::Mutability::Mut,
 
                 // The place isn't mutable once we dereference an immutable reference.
-                ty::Ref(.., hir::Mutability::Not) => return hir::Mutability::Not,
+                ty::Ref(.., hir::Mutability::Not, _) => return hir::Mutability::Not,
 
                 // Dereferencing a box doesn't change mutability
                 ty::Adt(def, ..) if def.is_box() => {}
@@ -1921,7 +1921,7 @@ fn should_reborrow_from_env_of_parent_coroutine_closure<'tcx>(
                 matches!(proj.kind, ProjectionKind::Deref)
                     && matches!(
                         child_capture.place.ty_before_projection(idx).kind(),
-                        ty::Ref(.., ty::Mutability::Not)
+                        ty::Ref(.., ty::Mutability::Not, _)
                     )
             }))
         // (2.)
@@ -1969,7 +1969,7 @@ fn apply_capture_kind_on_capture_ty<'tcx>(
 ) -> Ty<'tcx> {
     match capture_kind {
         ty::UpvarCapture::ByValue | ty::UpvarCapture::ByUse => ty,
-        ty::UpvarCapture::ByRef(kind) => Ty::new_ref(tcx, region, ty, kind.to_mutbl_lossy()),
+        ty::UpvarCapture::ByRef(kind) => Ty::new_ref(tcx, region, ty, kind.to_mutbl_lossy(), None),
     }
 }
 
@@ -2469,7 +2469,7 @@ fn truncate_place_to_len_and_update_capture_kind<'tcx>(
     curr_mode: &mut ty::UpvarCapture,
     len: usize,
 ) {
-    let is_mut_ref = |ty: Ty<'_>| matches!(ty.kind(), ty::Ref(.., hir::Mutability::Mut));
+    let is_mut_ref = |ty: Ty<'_>| matches!(ty.kind(), ty::Ref(.., hir::Mutability::Mut, _));
 
     // If the truncated part of the place contains `Deref` of a `&mut` then convert MutBorrow ->
     // UniqueImmBorrow
@@ -2564,7 +2564,7 @@ fn truncate_capture_for_optimization(
     mut place: Place<'_>,
     mut curr_mode: ty::UpvarCapture,
 ) -> (Place<'_>, ty::UpvarCapture) {
-    let is_shared_ref = |ty: Ty<'_>| matches!(ty.kind(), ty::Ref(.., hir::Mutability::Not));
+    let is_shared_ref = |ty: Ty<'_>| matches!(ty.kind(), ty::Ref(.., hir::Mutability::Not, _));
 
     // Find the rightmost deref (if any). All the projections that come after this
     // are fields or other "in-place pointer adjustments"; these refer therefore to

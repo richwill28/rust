@@ -250,8 +250,8 @@ impl<'a, 'tcx> ParseCtxt<'a, 'tcx> {
                 Ok(Rvalue::BinaryOp(BinOp::Offset, Box::new((ptr, offset))))
             },
             @call(mir_ptr_metadata, args) => Ok(Rvalue::UnaryOp(UnOp::PtrMetadata, self.parse_operand(args[0])?)),
-            ExprKind::Borrow { borrow_kind, arg } => Ok(
-                Rvalue::Ref(self.tcx.lifetimes.re_erased, *borrow_kind, self.parse_place(*arg)?)
+            ExprKind::Borrow { borrow_kind, arg, view } => Ok(
+                Rvalue::Ref(self.tcx.lifetimes.re_erased, *borrow_kind, self.parse_place(*arg)?, *view)
             ),
             ExprKind::RawBorrow { mutability, arg } => Ok(
                 Rvalue::RawPtr((*mutability).into(), self.parse_place(*arg)?)

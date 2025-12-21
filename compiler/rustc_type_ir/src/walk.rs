@@ -102,7 +102,8 @@ fn push_inner<I: Interner>(stack: &mut TypeWalkerStack<I>, parent: I::GenericArg
             ty::RawPtr(ty, _) => {
                 stack.push(ty.into());
             }
-            ty::Ref(lt, ty, _) => {
+            // Views don't contain nested generic arguments, so we ignore them.
+            ty::Ref(lt, ty, _, _view) => {
                 stack.push(ty.into());
                 stack.push(lt.into());
             }

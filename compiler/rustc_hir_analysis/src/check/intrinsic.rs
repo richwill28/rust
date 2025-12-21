@@ -275,7 +275,7 @@ pub(crate) fn check_intrinsic_type(
             },
         );
         let va_list_ty = tcx.type_of(did).instantiate(tcx, &[region.into()]);
-        (Ty::new_ref(tcx, env_region, va_list_ty, mutbl), va_list_ty)
+        (Ty::new_ref(tcx, env_region, va_list_ty, mutbl, None), va_list_ty)
     };
 
     let safety = intrinsic_operation_unsafety(tcx, intrinsic_id);

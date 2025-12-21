@@ -78,7 +78,7 @@ impl<'tcx> StatementKind<'tcx> {
 
     pub fn as_debuginfo(&self) -> Option<StmtDebugInfo<'tcx>> {
         match self {
-            StatementKind::Assign(box (place, Rvalue::Ref(_, _, ref_place)))
+            StatementKind::Assign(box (place, Rvalue::Ref(_, _, ref_place, _)))
                 if let Some(local) = place.as_local() =>
             {
                 Some(StmtDebugInfo::AssignRef(local, *ref_place))
@@ -738,7 +738,7 @@ impl<'tcx> Rvalue<'tcx> {
             Rvalue::Use(_)
             | Rvalue::CopyForDeref(_)
             | Rvalue::Repeat(_, _)
-            | Rvalue::Ref(_, _, _)
+            | Rvalue::Ref(_, _, _, _)
             | Rvalue::ThreadLocalRef(_)
             | Rvalue::RawPtr(_, _)
             | Rvalue::Cast(
@@ -775,9 +775,9 @@ impl<'tcx> Rvalue<'tcx> {
                 Ty::new_array_with_const_len(tcx, operand.ty(local_decls, tcx), count)
             }
             Rvalue::ThreadLocalRef(did) => tcx.thread_local_ptr_ty(did),
-            Rvalue::Ref(reg, bk, ref place) => {
+            Rvalue::Ref(reg, bk, ref place, ref view) => {
                 let place_ty = place.ty(local_decls, tcx).ty;
-                Ty::new_ref(tcx, reg, place_ty, bk.to_mutbl_lossy())
+                Ty::new_ref(tcx, reg, place_ty, bk.to_mutbl_lossy(), *view)
             }
             Rvalue::RawPtr(kind, ref place) => {
                 let place_ty = place.ty(local_decls, tcx).ty;

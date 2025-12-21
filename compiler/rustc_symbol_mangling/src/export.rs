@@ -102,7 +102,7 @@ impl<'tcx> AbiHashStable<'tcx> for Ty<'tcx> {
 
             // FIXME: Not yet supported.
             ty::Foreign(_)
-            | ty::Ref(_, _, _)
+            | ty::Ref(_, _, _, _)
             | ty::Str
             | ty::Array(_, _)
             | ty::Pat(_, _)

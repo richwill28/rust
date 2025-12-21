@@ -554,7 +554,7 @@ impl<'tcx> PlaceCollector<'_, 'tcx> {
         let mut ty = PlaceTy::from_ty(self.body.local_decls[place.local].ty);
         tracing::trace!(?place_index, ?ty);
 
-        if let ty::Ref(_, ref_ty, _) | ty::RawPtr(ref_ty, _) = ty.ty.kind()
+        if let ty::Ref(_, ref_ty, _, _) | ty::RawPtr(ref_ty, _) = ty.ty.kind()
             && let ty::Slice(..) = ref_ty.kind()
         {
             self.map.register_place(self.tcx.types.usize, place_index, TrackElem::DerefLen);
@@ -569,7 +569,7 @@ impl<'tcx> PlaceCollector<'_, 'tcx> {
             place_index = self.map.register_place(ty.ty, place_index, track_elem);
             tracing::trace!(?proj, ?place_index, ?ty);
 
-            if let ty::Ref(_, ref_ty, _) | ty::RawPtr(ref_ty, _) = ty.ty.kind()
+            if let ty::Ref(_, ref_ty, _, _) | ty::RawPtr(ref_ty, _) = ty.ty.kind()
                 && let ty::Slice(..) = ref_ty.kind()
             {
                 self.map.register_place(self.tcx.types.usize, place_index, TrackElem::DerefLen);

@@ -459,7 +459,12 @@ pub(crate) fn spanned_type_di_node<'ll, 'tcx>(
         ty::Slice(_) | ty::Str => build_slice_type_di_node(cx, t, unique_type_id),
         ty::Dynamic(..) => build_dyn_type_di_node(cx, t, unique_type_id),
         ty::Foreign(..) => build_foreign_type_di_node(cx, t, unique_type_id),
-        ty::RawPtr(pointee_type, _) | ty::Ref(_, pointee_type, _) => {
+        ty::RawPtr(pointee_type, _) => {
+            build_pointer_or_reference_di_node(cx, t, pointee_type, unique_type_id)
+        }
+        // View doesn't affect the debug info structure, but is included in the type name
+        // via `compute_debuginfo_type_name()`.
+        ty::Ref(_, pointee_type, _, _view) => {
             build_pointer_or_reference_di_node(cx, t, pointee_type, unique_type_id)
         }
         // Some `Box` are newtyped pointers, make debuginfo aware of that.

@@ -333,10 +333,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         },
                     );
                 }
-                if let ty::Ref(region, t_type, mutability) = rcvr_ty.kind() {
+                if let ty::Ref(region, t_type, mutability, view) = rcvr_ty.kind() {
                     if needs_mut {
                         let trait_type =
-                            Ty::new_ref(self.tcx, *region, *t_type, mutability.invert());
+                            Ty::new_ref(self.tcx, *region, *t_type, mutability.invert(), *view);
                         let msg = format!("you need `{trait_type}` instead of `{rcvr_ty}`");
                         let mut kind = &self_expr.kind;
                         while let hir::ExprKind::AddrOf(_, _, expr)
@@ -1099,7 +1099,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if unsatisfied_predicates.is_empty() {
             err.span_label(span, format!("{item_kind} not found in `{ty_str}`"));
             let is_string_or_ref_str = match rcvr_ty.kind() {
-                ty::Ref(_, ty, _) => {
+                ty::Ref(_, ty, _, _) => {
                     ty.is_str()
                         || matches!(
                             ty.kind(),
@@ -3446,12 +3446,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             && let ty::RawPtr(ty, ptr_mutbl) = *rcvr_ty.kind()
             && let Ok(pick) = self.lookup_probe_for_diagnostic(
                 item_ident,
-                Ty::new_ref(tcx, ty::Region::new_error_misc(tcx), ty, ptr_mutbl),
+                Ty::new_ref(tcx, ty::Region::new_error_misc(tcx), ty, ptr_mutbl, None),
                 self.tcx.hir_expect_expr(self.tcx.parent_hir_id(rcvr_expr.hir_id)),
                 ProbeScope::TraitsInScope,
                 None,
             )
-            && let ty::Ref(_, _, sugg_mutbl) = *pick.self_ty.kind()
+            && let ty::Ref(_, _, sugg_mutbl, _) = *pick.self_ty.kind()
             && (sugg_mutbl.is_not() || ptr_mutbl.is_mut())
         {
             let (method, method_anchor) = match sugg_mutbl {
@@ -4017,7 +4017,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             let param_type = match *rcvr_ty.kind() {
                 ty::Param(param) => Some(param),
-                ty::Ref(_, ty, _) => match *ty.kind() {
+                ty::Ref(_, ty, _, _) => match *ty.kind() {
                     ty::Param(param) => Some(param),
                     _ => None,
                 },

@@ -448,7 +448,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                     // for example:
                     // struct Y(u32);
                     // x's type is '& mut Y' and it is used in `fn generic<T>(x: T) {}`.
-                    if let ty::Ref(_, _, hir::Mutability::Mut) = ty.kind()
+                    // TODO: Implement view types in borrowck.
+                    if let ty::Ref(_, _, hir::Mutability::Mut, _view) = ty.kind()
                         && arg_param.is_some()
                     {
                         *has_suggest_reborrow = true;
@@ -671,7 +672,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         // Try borrowing a shared reference first, then mutably.
         if let Some(mutbl) = [ty::Mutability::Not, ty::Mutability::Mut].into_iter().find(|&mutbl| {
             let re = self.infcx.tcx.lifetimes.re_erased;
-            let ref_ty = Ty::new_ref(self.infcx.tcx, re, moved_arg_ty, mutbl);
+            // TODO: Implement view types in borrowck.
+            let ref_ty = Ty::new_ref(self.infcx.tcx, re, moved_arg_ty, mutbl, None);
 
             // Ensure that substituting `ref_ty` in the callee's signature doesn't break
             // other inputs or the return type.
@@ -1583,11 +1585,13 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
             } else if typeck_results.expr_adjustments(expr).first().is_some_and(|adj| {
                 matches!(
                     adj.kind,
+                    // TODO: Implement view types in borrowck.
                     ty::adjustment::Adjust::Borrow(ty::adjustment::AutoBorrow::Ref(
                         ty::adjustment::AutoBorrowMutability::Not
                             | ty::adjustment::AutoBorrowMutability::Mut {
                                 allow_two_phase_borrow: ty::adjustment::AllowTwoPhase::No
-                            }
+                            },
+                        _
                     ))
                 )
             }) && let Some(ty) = typeck_results.expr_ty_opt(expr)
@@ -1995,7 +1999,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 && let Some(rcvr_ty) = typeck_results.node_type_opt(rcvr.hir_id)
                 && let Some(ty) = typeck_results.node_type_opt(expr.hir_id)
                 && rcvr_ty == ty
-                && let ty::Ref(_, inner, _) = rcvr_ty.kind()
+                // TODO: Implement view types in borrowck.
+                && let ty::Ref(_, inner, _, _view) = rcvr_ty.kind()
                 && let inner = inner.peel_refs()
                 && (Holds { ty: inner }).visit_ty(local_ty).is_break()
                 && let None =
@@ -4154,7 +4159,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
 
                     // Otherwise, look at other types of assignment.
                     let assigned_from = match rvalue {
-                        Rvalue::Ref(_, _, assigned_from) => assigned_from,
+                        // TODO: Implement view types in borrowck.
+                        Rvalue::Ref(_, _, assigned_from, _view) => assigned_from,
                         Rvalue::Use(operand) => match operand {
                             Operand::Copy(assigned_from) | Operand::Move(assigned_from) => {
                                 assigned_from
@@ -4285,14 +4291,16 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         //    anything.
         let return_ty = sig.output();
         match return_ty.skip_binder().kind() {
-            ty::Ref(return_region, _, _)
+            // TODO: Implement view types in borrowck.
+            ty::Ref(return_region, _, _, _view)
                 if return_region.is_named(self.infcx.tcx) && !is_closure =>
             {
                 // This is case 1 from above, return type is a named reference so we need to
                 // search for relevant arguments.
                 let mut arguments = Vec::new();
                 for (index, argument) in sig.inputs().skip_binder().iter().enumerate() {
-                    if let ty::Ref(argument_region, _, _) = argument.kind()
+                    // TODO: Implement view types in borrowck.
+                    if let ty::Ref(argument_region, _, _, _view) = argument.kind()
                         && argument_region == return_region
                     {
                         // Need to use the `rustc_middle::ty` types to compare against the
@@ -4347,7 +4355,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                     return_span,
                 })
             }
-            ty::Ref(_, _, _) if is_closure => {
+            // TODO: Implement view types in borrowck.
+            ty::Ref(_, _, _, _view) if is_closure => {
                 // This is case 2 from above but only for closures, return type is anonymous
                 // reference so we select
                 // the first argument.
@@ -4358,7 +4367,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 // from that.
                 if let ty::Tuple(elems) = argument_ty.kind() {
                     let &argument_ty = elems.first()?;
-                    if let ty::Ref(_, _, _) = argument_ty.kind() {
+                    // TODO: Implement view types in borrowck.
+                    if let ty::Ref(_, _, _, _view) = argument_ty.kind() {
                         return Some(AnnotatedBorrowFnSignature::Closure {
                             argument_ty,
                             argument_span,
@@ -4368,7 +4378,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
 
                 None
             }
-            ty::Ref(_, _, _) => {
+            // TODO: Implement view types in borrowck.
+            ty::Ref(_, _, _, _view) => {
                 // This is also case 2 from above but for functions, return type is still an
                 // anonymous reference so we select the first argument.
                 let argument_span = fn_decl.inputs.first()?.span;
@@ -4379,7 +4390,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
 
                 // We expect the first argument to be a reference.
                 match argument_ty.kind() {
-                    ty::Ref(_, _, _) => {}
+                    // TODO: Implement view types in borrowck.
+                    ty::Ref(_, _, _, _view) => {}
                     _ => return None,
                 }
 

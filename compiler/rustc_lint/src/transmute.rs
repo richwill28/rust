@@ -148,7 +148,7 @@ fn check_int_to_ptr_transmute<'tcx>(
     if !matches!(src.kind(), ty::Uint(_) | ty::Int(_)) {
         return;
     }
-    let (ty::Ref(_, inner_ty, mutbl) | ty::RawPtr(inner_ty, mutbl)) = dst.kind() else {
+    let (ty::Ref(_, inner_ty, mutbl, _) | ty::RawPtr(inner_ty, mutbl)) = dst.kind() else {
         return;
     };
     // bail-out if the argument is literal 0 as we have other lints for those cases

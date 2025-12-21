@@ -410,7 +410,7 @@ impl<'tcx> SizeSkeleton<'tcx> {
         };
 
         match *ty.kind() {
-            ty::Ref(_, pointee, _) | ty::RawPtr(pointee, _) => {
+            ty::Ref(_, pointee, _, _) | ty::RawPtr(pointee, _) => {
                 let non_zero = !ty.is_raw_ptr();
 
                 let tail = tcx.struct_tail_raw(
@@ -858,7 +858,7 @@ where
                 }
 
                 // Potentially-wide pointers.
-                ty::Ref(_, pointee, _) | ty::RawPtr(pointee, _) => {
+                ty::Ref(_, pointee, _, _) | ty::RawPtr(pointee, _) => {
                     assert!(i < this.fields.count());
 
                     // Reuse the wide `*T` type as its own thin pointer data field.
@@ -1032,7 +1032,7 @@ where
                     safe: None,
                 })
             }
-            ty::Ref(_, ty, mt) if offset.bytes() == 0 => {
+            ty::Ref(_, ty, mt, _) if offset.bytes() == 0 => {
                 // Use conservative pointer kind if not optimizing. This saves us the
                 // Freeze/Unpin queries, and can save time in the codegen backend (noalias
                 // attributes in LLVM have compile-time cost even in unoptimized builds).

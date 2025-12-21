@@ -134,7 +134,10 @@ pub fn simplify_type<I: Interner>(
             }
             _ => Some(SimplifiedType::MarkerTraitObject),
         },
-        ty::Ref(_, _, mutbl) => Some(SimplifiedType::Ref(mutbl)),
+        // We ignore the view because this function is used for hashmap bucketing,
+        // where over-approximation is acceptable. Views are checked later in
+        // `DeepRejectCtxt::types_may_unify_inner` for precise filtering.
+        ty::Ref(_, _, mutbl, _view) => Some(SimplifiedType::Ref(mutbl)),
         ty::FnDef(def_id, _) => Some(SimplifiedType::Closure(def_id.into())),
         ty::Closure(def_id, _) => Some(SimplifiedType::Closure(def_id.into())),
         ty::CoroutineClosure(def_id, _) => Some(SimplifiedType::Closure(def_id.into())),
@@ -327,8 +330,11 @@ impl<I: Interner, const INSTANTIATE_LHS_WITH_INFER: bool, const INSTANTIATE_RHS_
 
         // For purely rigid types, use structural equivalence.
         match lhs.kind() {
-            ty::Ref(_, lhs_ty, lhs_mutbl) => match rhs.kind() {
-                ty::Ref(_, rhs_ty, rhs_mutbl) => {
+            ty::Ref(_, lhs_ty, lhs_mutbl, _lhs_view) => match rhs.kind() {
+                ty::Ref(_, rhs_ty, rhs_mutbl, _rhs_view) => {
+                    // Note: We don't check views here because fast_reject should be conservative.
+                    // Views like `&{x, y}` and `&{y, x}` are semantically equivalent but would fail
+                    // a direct equality check. The precise view comparison happens in `relate.rs`.
                     lhs_mutbl == rhs_mutbl && self.types_may_unify_inner(lhs_ty, rhs_ty, depth)
                 }
                 _ => false,

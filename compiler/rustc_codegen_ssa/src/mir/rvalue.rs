@@ -503,9 +503,12 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                 OperandRef { val, layout: cast, move_annotation: None }
             }
 
-            mir::Rvalue::Ref(_, bk, place) => {
+            mir::Rvalue::Ref(_, bk, place, view) => {
+                // Views are a compile-time safety feature and don't affect the runtime
+                // representation. We preserve them in the type for debug info purposes,
+                // but they don't generate any code or affect the pointer itself.
                 let mk_ref = move |tcx: TyCtxt<'tcx>, ty: Ty<'tcx>| {
-                    Ty::new_ref(tcx, tcx.lifetimes.re_erased, ty, bk.to_mutbl_lossy())
+                    Ty::new_ref(tcx, tcx.lifetimes.re_erased, ty, bk.to_mutbl_lossy(), view)
                 };
                 self.codegen_place_to_pointer(bx, place, mk_ref)
             }

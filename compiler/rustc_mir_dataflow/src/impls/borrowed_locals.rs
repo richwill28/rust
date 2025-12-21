@@ -77,15 +77,23 @@ where
         match rvalue {
             // We ignore fake borrows as these get removed after analysis and shouldn't effect
             // the layout of generators.
-            Rvalue::RawPtr(_, borrowed_place)
-            | Rvalue::Ref(_, BorrowKind::Mut { .. } | BorrowKind::Shared, borrowed_place) => {
+            Rvalue::RawPtr(_, borrowed_place) => {
                 if !borrowed_place.is_indirect() {
                     self.trans.gen_(borrowed_place.local);
                 }
             }
-
+            // View is ignored. We mark the entire local as borrowed even if only specific
+            // fields are borrowed (e.g. `&{field} local`). This should be sound but conservative.
+            // TODO: Investigate whether making this analysis view-aware would enable better
+            // optimizations.
+            Rvalue::Ref(_, BorrowKind::Mut { .. } | BorrowKind::Shared, borrowed_place, _view) => {
+                if !borrowed_place.is_indirect() {
+                    self.trans.gen_(borrowed_place.local);
+                }
+            }
+            // TODO: Ditto.
+            Rvalue::Ref(_, BorrowKind::Fake(_), _, _view) => {}
             Rvalue::Cast(..)
-            | Rvalue::Ref(_, BorrowKind::Fake(_), _)
             | Rvalue::ShallowInitBox(..)
             | Rvalue::Use(..)
             | Rvalue::ThreadLocalRef(..)

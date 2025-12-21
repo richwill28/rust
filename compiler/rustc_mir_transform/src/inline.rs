@@ -895,6 +895,7 @@ fn inline_call<'tcx, I: Inliner<'tcx>>(
             tcx.lifetimes.re_erased,
             BorrowKind::Mut { kind: MutBorrowKind::Default },
             destination,
+            None,
         );
         let dest_ty = dest.ty(caller_body, tcx);
         let temp = Place::from(new_call_temp(caller_body, callsite, dest_ty, return_block));

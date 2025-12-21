@@ -76,7 +76,7 @@ impl<'tcx> Ty<'tcx> {
                 | InferTy::FreshIntTy(_)
                 | InferTy::FreshFloatTy(_),
             ) => true,
-            Ref(_, x, _) | Array(x, _) | Slice(x) => x.peel_refs().is_simple_ty(),
+            Ref(_, x, _, _) | Array(x, _) | Slice(x) => x.peel_refs().is_simple_ty(),
             Tuple(tys) if tys.is_empty() => true,
             _ => false,
         }
@@ -89,7 +89,7 @@ impl<'tcx> Ty<'tcx> {
     pub fn is_simple_text(self) -> bool {
         match self.kind() {
             Adt(_, args) => args.non_erasable_generics().next().is_none(),
-            Ref(_, ty, _) => ty.is_simple_text(),
+            Ref(_, ty, _, _) => ty.is_simple_text(),
             _ => self.is_simple_ty(),
         }
     }

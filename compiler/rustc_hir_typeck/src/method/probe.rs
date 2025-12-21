@@ -1495,8 +1495,11 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                 pick.autoderefs = step.autoderefs;
 
                 match *step.self_ty.value.value.kind() {
-                    // Insert a `&*` or `&mut *` if this is a reference type:
-                    ty::Ref(_, _, mutbl) => {
+                    // Insert a `&*` or `&mut *` if this is a reference type.
+                    // View is ignored here because `AutorefOrPtrAdjustment` only stores metadata
+                    // (mutability), not the full type. The view flows through `pick.self_ty` and
+                    // is extracted later in `confirm.rs` from the method signature.
+                    ty::Ref(_, _, mutbl, _view) => {
                         pick.autoderefs += 1;
                         pick.autoref_or_ptr_adjustment = Some(AutorefOrPtrAdjustment::Autoref {
                             mutbl,
@@ -1509,7 +1512,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                             && self.tcx.is_lang_item(def.did(), hir::LangItem::Pin) =>
                     {
                         // make sure this is a pinned reference (and not a `Pin<Box>` or something)
-                        if let ty::Ref(_, _, mutbl) = args[0].expect_ty().kind() {
+                        if let ty::Ref(_, _, mutbl, _) = args[0].expect_ty().kind() {
                             pick.autoref_or_ptr_adjustment =
                                 Some(AutorefOrPtrAdjustment::ReborrowPin(*mutbl));
                         }
@@ -1543,7 +1546,8 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
         // In general, during probing we erase regions.
         let region = tcx.lifetimes.re_erased;
 
-        let autoref_ty = Ty::new_ref(tcx, region, self_ty, mutbl);
+        // We also ignore view during probing.
+        let autoref_ty = Ty::new_ref(tcx, region, self_ty, mutbl, None);
         self.pick_method(
             autoref_ty,
             instantiate_self_ty_obligations,
@@ -1577,7 +1581,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
         let inner_ty = match self_ty.kind() {
             ty::Adt(def, args) if self.tcx.is_lang_item(def.did(), hir::LangItem::Pin) => {
                 match args[0].expect_ty().kind() {
-                    ty::Ref(_, ty, hir::Mutability::Mut) => *ty,
+                    ty::Ref(_, ty, hir::Mutability::Mut, _) => *ty,
                     _ => {
                         return None;
                     }
@@ -1918,7 +1922,17 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                     (xform_self_ty, xform_ret_ty) =
                         self.xform_self_ty(probe.item, impl_ty, impl_args);
                     xform_self_ty = ocx.normalize(cause, self.param_env, xform_self_ty);
-                    match ocx.relate(cause, self.param_env, self.variance(), self_ty, xform_self_ty)
+                    // For method probing, strip views from receiver types. Views are a 
+                    // restriction on field access, not a distinct type, so `&{x} T` should
+                    // match `&T` during method lookup. The view is preserved in the actual
+                    // method signature and checked during well-formedness checking.
+                    let xform_self_ty_for_probe = match xform_self_ty.kind() {
+                        ty::Ref(region, ty, mutbl, Some(_view)) => {
+                            Ty::new_ref(self.tcx, *region, *ty, *mutbl, None)
+                        }
+                        _ => xform_self_ty,
+                    };
+                    match ocx.relate(cause, self.param_env, self.variance(), self_ty, xform_self_ty_for_probe)
                     {
                         Ok(()) => {}
                         Err(err) => {

@@ -370,14 +370,19 @@ fn pretty_rvalue<W: Write>(writer: &mut W, rval: &Rvalue) -> io::Result<()> {
         Rvalue::Len(len) => {
             write!(writer, "len({len:?})")
         }
-        Rvalue::Ref(_, borrowkind, place) => {
+        Rvalue::Ref(_, borrowkind, place, view) => {
             let kind = match borrowkind {
                 BorrowKind::Shared => "&",
                 BorrowKind::Fake(FakeBorrowKind::Deep) => "&fake ",
                 BorrowKind::Fake(FakeBorrowKind::Shallow) => "&fake shallow ",
                 BorrowKind::Mut { .. } => "&mut ",
             };
-            write!(writer, "{kind}{place:?}")
+            let view = view.as_ref().map_or(String::new(), |v| {
+                format!("{{{}}} ", v.iter().map(|field| {
+                    format!("{}{}", pretty_mut(field.mutbl), field.path.join("."))
+                }).collect::<Vec<_>>().join(", "))
+            });
+            write!(writer, "{kind}{view}{place:?}")
         }
         Rvalue::Repeat(op, cnst) => {
             write!(writer, "[{}; {}]", pretty_operand(op), pretty_ty_const(cnst))

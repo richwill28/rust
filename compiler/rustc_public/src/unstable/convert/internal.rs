@@ -17,7 +17,7 @@ use crate::ty::{
     Abi, AdtDef, Binder, BoundRegionKind, BoundTyKind, BoundVariableKind, ClosureKind,
     ExistentialPredicate, ExistentialProjection, ExistentialTraitRef, FloatTy, FnSig,
     GenericArgKind, GenericArgs, IntTy, MirConst, Movability, Pattern, Region, RigidTy, Span,
-    TermKind, TraitRef, Ty, TyConst, UintTy, VariantDef, VariantIdx,
+    TermKind, TraitRef, Ty, TyConst, UintTy, VariantDef, VariantIdx, ViewField,
 };
 use crate::unstable::{InternalCx, RustcInternal};
 use crate::{CrateItem, CrateNum, DefId, IndexedVal};
@@ -161,11 +161,21 @@ impl RustcInternal for RigidTy {
             RigidTy::RawPtr(ty, mutability) => {
                 rustc_ty::TyKind::RawPtr(ty.internal(tables, tcx), mutability.internal(tables, tcx))
             }
-            RigidTy::Ref(region, ty, mutability) => rustc_ty::TyKind::Ref(
-                region.internal(tables, tcx),
-                ty.internal(tables, tcx),
-                mutability.internal(tables, tcx),
-            ),
+            RigidTy::Ref(region, ty, mutability, view) => {
+                // We can't rely on the generic Vec<T>::internal() implementation here because
+                // it would return Vec<ViewField<'tcx>>, but we need &'tcx List<ViewField<'tcx>>.
+                // The internal representation requires an interned list created via mk_view_fields.
+                let view_internal = view.as_ref().map(|fields| {
+                    let converted: Vec<_> = fields.iter().map(|f| f.internal(tables, tcx)).collect();
+                    tcx.tcx().mk_view_fields(&converted)
+                });
+                rustc_ty::TyKind::Ref(
+                    region.internal(tables, tcx),
+                    ty.internal(tables, tcx),
+                    mutability.internal(tables, tcx),
+                    view_internal,
+                )
+            }
             RigidTy::Foreign(def) => rustc_ty::TyKind::Foreign(def.0.internal(tables, tcx)),
             RigidTy::FnDef(def, args) => {
                 rustc_ty::TyKind::FnDef(def.0.internal(tables, tcx), args.internal(tables, tcx))
@@ -266,6 +276,20 @@ impl RustcInternal for Mutability {
             Mutability::Not => rustc_ty::Mutability::Not,
             Mutability::Mut => rustc_ty::Mutability::Mut,
         }
+    }
+}
+
+impl RustcInternal for ViewField {
+    type T<'tcx> = rustc_ty::ViewField<'tcx>;
+
+    fn internal<'tcx>(
+        &self,
+        tables: &mut Tables<'_, BridgeTys>,
+        tcx: impl InternalCx<'tcx>,
+    ) -> Self::T<'tcx> {
+        let symbols: Vec<_> = self.path.iter().map(|s| rustc_span::Symbol::intern(s)).collect();
+        let path = tcx.tcx().arena.alloc_slice(&symbols);
+        rustc_ty::ViewField::new(path, self.mutbl.internal(tables, tcx))
     }
 }
 

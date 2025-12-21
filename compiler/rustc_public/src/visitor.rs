@@ -2,7 +2,7 @@ use std::ops::ControlFlow;
 
 use super::ty::{
     Allocation, Binder, ConstDef, ExistentialPredicate, FnSig, GenericArgKind, GenericArgs,
-    MirConst, Promoted, Region, RigidTy, TermKind, Ty, UnevaluatedConst,
+    MirConst, Promoted, Region, RigidTy, TermKind, Ty, UnevaluatedConst, ViewField,
 };
 use crate::Opaque;
 use crate::ty::TyConst;
@@ -86,6 +86,13 @@ impl Visitable for Allocation {
     }
 }
 
+impl Visitable for ViewField {
+    fn super_visit<V: Visitor>(&self, _visitor: &mut V) -> ControlFlow<V::Break> {
+        // ViewField contains no types to visit (only symbols and mutability).
+        ControlFlow::Continue(())
+    }
+}
+
 impl Visitable for UnevaluatedConst {
     fn super_visit<V: Visitor>(&self, visitor: &mut V) -> ControlFlow<V::Break> {
         let UnevaluatedConst { def, args, promoted } = self;
@@ -160,9 +167,10 @@ impl Visitable for RigidTy {
             RigidTy::Pat(t, _p) => t.visit(visitor),
             RigidTy::Slice(inner) => inner.visit(visitor),
             RigidTy::RawPtr(ty, _) => ty.visit(visitor),
-            RigidTy::Ref(reg, ty, _) => {
+            RigidTy::Ref(reg, ty, _, view) => {
                 reg.visit(visitor)?;
-                ty.visit(visitor)
+                ty.visit(visitor)?;
+                view.visit(visitor)
             }
             RigidTy::Adt(_, args)
             | RigidTy::Closure(_, args)

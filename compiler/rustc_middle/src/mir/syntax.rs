@@ -1371,7 +1371,10 @@ pub enum Rvalue<'tcx> {
     /// exactly what the behavior of this operation should be.
     ///
     /// `Shallow` borrows are disallowed after drop lowering.
-    Ref(Region<'tcx>, BorrowKind, Place<'tcx>),
+    ///
+    /// The optional view parameter restricts which fields of the place can be accessed through
+    /// this reference (e.g., `&{field} x` only allows accessing `x.field`).
+    Ref(Region<'tcx>, BorrowKind, Place<'tcx>, Option<ty::View<'tcx>>),
 
     /// Creates a pointer/reference to the given thread local.
     ///

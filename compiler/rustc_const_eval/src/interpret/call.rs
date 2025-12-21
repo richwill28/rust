@@ -206,7 +206,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
         let pointee_ty = |ty: Ty<'tcx>| -> InterpResult<'tcx, Option<Ty<'tcx>>> {
             // We cannot use `builtin_deref` here since we need to reject `Box<T, MyAlloc>`.
             interp_ok(Some(match ty.kind() {
-                ty::Ref(_, ty, _) => *ty,
+                ty::Ref(_, ty, _, _) => *ty,
                 ty::RawPtr(ty, _) => *ty,
                 // We only accept `Box` with the default allocator.
                 _ if ty.is_box_global(*self.tcx) => ty.expect_boxed_ty(),

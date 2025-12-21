@@ -188,7 +188,7 @@ impl<'tcx> Ty<'tcx> {
             ty::Pat(..) => "pattern type".into(),
             ty::Slice(_) => "slice".into(),
             ty::RawPtr(_, _) => "raw pointer".into(),
-            ty::Ref(.., mutbl) => match mutbl {
+            ty::Ref(_, _, mutbl, _) => match mutbl {
                 hir::Mutability::Mut => "mutable reference",
                 _ => "reference",
             }

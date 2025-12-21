@@ -447,6 +447,15 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         }
     }
 
+    pub fn lower_view(&self, view: &hir::View<'tcx>) -> ty::View<'tcx> {
+        let tcx = self.tcx();
+        let fields: Vec<_> = view.fields.iter().map(|hir_field| {
+            let path = tcx.arena.alloc_slice(hir_field.path);
+            ty::ViewField::new(path, hir_field.mutbl)
+        }).collect();
+        tcx.mk_view_fields(&fields)
+    }
+
     pub fn lower_generic_args_of_path_segment(
         &self,
         span: Span,
@@ -2456,20 +2465,12 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
             hir::TyKind::InferDelegation(_, idx) => self.lower_delegation_ty(*idx),
             hir::TyKind::Slice(ty) => Ty::new_slice(tcx, self.lower_ty(ty)),
             hir::TyKind::Ptr(mt) => Ty::new_ptr(tcx, self.lower_ty(mt.ty), mt.mutbl),
-            hir::TyKind::Ref(region, mt, _view) => {
+            hir::TyKind::Ref(region, mt, view) => {
                 let r = self.lower_lifetime(region, RegionInferReason::Reference);
                 debug!(?r);
                 let t = self.lower_ty(mt.ty);
-                // View constraints are not lowered into the core type system representation.
-                // Instead, view information remains in HIR and is used during type checking
-                // to enforce field access restrictions. This is a lightweight implementation
-                // strategy: during HIR type checking, we track active view constraints and
-                // validate field accesses against them. When we eventually implement borrow
-                // checking for views, we expect to query HIR for view information as needed
-                // rather than carrying view data through the entire type system. This approach
-                // avoids the complexity of integrating views into core types (Ty), variance
-                // computation, trait solving, and other type system mechanisms.
-                Ty::new_ref(tcx, r, t, mt.mutbl)
+                let v = view.map(|view| self.lower_view(view));
+                Ty::new_ref(tcx, r, t, mt.mutbl, v)
             }
             hir::TyKind::Never => tcx.types.never,
             hir::TyKind::Tup(fields) => {

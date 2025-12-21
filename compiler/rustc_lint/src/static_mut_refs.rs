@@ -97,7 +97,7 @@ impl<'tcx> LateLintPass<'tcx> for StaticMutRefs {
                     && let inputs =
                         cx.tcx.fn_sig(method_def_id).skip_binder().inputs().skip_binder()
                     && let Some(receiver) = inputs.get(0)
-                    && let TyKind::Ref(_, _, m) = receiver.kind() =>
+                    && let TyKind::Ref(_, _, m, _) = receiver.kind() =>
             {
                 emit_static_mut_refs(cx, err_span, err_span.shrink_to_lo(), *m, false);
             }

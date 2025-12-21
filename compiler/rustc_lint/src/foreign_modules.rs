@@ -6,7 +6,9 @@ use rustc_hir::attrs::AttributeKind;
 use rustc_hir::def::DefKind;
 use rustc_hir::find_attr;
 use rustc_middle::query::Providers;
-use rustc_middle::ty::{self, AdtDef, Instance, Ty, TyCtxt};
+use rustc_middle::ty::{
+    self, AdtDef, Instance, Ty, TyCtxt, semantically_equivalent_view,
+};
 use rustc_session::declare_lint;
 use rustc_span::{Span, Symbol};
 use tracing::{debug, instrument};
@@ -320,9 +322,12 @@ fn structurally_same_type_impl<'tcx>(
                     a_mutbl == b_mutbl
                         && structurally_same_type_impl(seen_types, tcx, typing_env, *a_ty, *b_ty)
                 }
-                (ty::Ref(_a_region, a_ty, a_mut), ty::Ref(_b_region, b_ty, b_mut)) => {
+                (ty::Ref(_a_region, a_ty, a_mut, a_view), ty::Ref(_b_region, b_ty, b_mut, b_view)) => {
                     // For structural sameness, we don't need the region to be same.
+                    // However, mutability and view must match. They declare contracts about
+                    // what the foreign function is allowed to do with the reference.
                     a_mut == b_mut
+                        && semantically_equivalent_view(tcx, *a_view, *a_ty, *a_mut, *b_view, *b_ty, *b_mut)
                         && structurally_same_type_impl(seen_types, tcx, typing_env, *a_ty, *b_ty)
                 }
                 (ty::FnDef(..), ty::FnDef(..)) => {

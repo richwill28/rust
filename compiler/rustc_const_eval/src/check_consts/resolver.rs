@@ -180,7 +180,7 @@ where
                 }
             }
 
-            mir::Rvalue::Ref(_, kind, borrowed_place) => {
+            mir::Rvalue::Ref(_, kind, borrowed_place, _) => {
                 if !borrowed_place.is_indirect() && self.ref_allows_mutation(*kind, *borrowed_place)
                 {
                     let place_ty = borrowed_place.ty(self.ccx.body, self.ccx.tcx).ty;

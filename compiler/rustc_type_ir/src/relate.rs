@@ -468,9 +468,15 @@ pub fn structurally_relate_tys<I: Interner, R: TypeRelation<I>>(
             Ok(Ty::new_ptr(cx, ty, a_mutbl))
         }
 
-        (ty::Ref(a_r, a_ty, a_mutbl), ty::Ref(b_r, b_ty, b_mutbl)) => {
+        (ty::Ref(a_r, a_ty, a_mutbl, a_view), ty::Ref(b_r, b_ty, b_mutbl, b_view)) => {
             if a_mutbl != b_mutbl {
                 return Err(TypeError::Mutability);
+            }
+
+            // Views must be semantically equivalent to unify (same field set, order-independent).
+            // None represents a maximally permissive view.
+            if !cx.views_may_unify(a_view, a, a_mutbl, b_view, b, b_mutbl) {
+                return Err(TypeError::Sorts(ExpectedFound::new(a, b)));
             }
 
             let (variance, info) = match a_mutbl {
@@ -483,7 +489,7 @@ pub fn structurally_relate_tys<I: Interner, R: TypeRelation<I>>(
             let r = relation.relate(a_r, b_r)?;
             let ty = relation.relate_with_variance(variance, info, a_ty, b_ty)?;
 
-            Ok(Ty::new_ref(cx, r, ty, a_mutbl))
+            Ok(Ty::new_ref(cx, r, ty, a_mutbl, a_view))
         }
 
         (ty::Array(a_t, sz_a), ty::Array(b_t, sz_b)) => {

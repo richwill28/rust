@@ -149,7 +149,7 @@ fn check_panic<'tcx>(cx: &LateContext<'tcx>, f: &'tcx hir::Expr<'tcx>, arg: &'tc
             // If this is a &str or String, we can confidently give the `"{}", ` suggestion.
             let is_str = matches!(
                 ty.kind(),
-                ty::Ref(_, r, _) if r.is_str(),
+                ty::Ref(_, r, _, _) if r.is_str(),
             ) || matches!(
                 ty.ty_adt_def(),
                 Some(ty_def) if cx.tcx.is_lang_item(ty_def.did(), LangItem::String),

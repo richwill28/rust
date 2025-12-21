@@ -309,6 +309,7 @@ where
                 tcx.lifetimes.re_erased,
                 BorrowKind::Mut { kind: MutBorrowKind::Default },
                 place,
+                None,
             ),
         );
 
@@ -969,6 +970,7 @@ where
                     tcx.lifetimes.re_erased,
                     BorrowKind::Mut { kind: MutBorrowKind::Default },
                     self.place,
+                    None,
                 ),
             )],
             Some(Terminator {

@@ -109,8 +109,8 @@ pub enum TyKind<I: Interner> {
     RawPtr(I::Ty, Mutability),
 
     /// A reference; a pointer with an associated lifetime. Written as
-    /// `&'a mut T` or `&'a T`.
-    Ref(I::Region, I::Ty, Mutability),
+    /// `&'a mut T` or `&'a T`, optionally with view (e.g., `&{field} T`).
+    Ref(I::Region, I::Ty, Mutability, Option<I::View>),
 
     /// The anonymous type of a function declaration/definition. Each
     /// function has a unique type.
@@ -296,7 +296,7 @@ impl<I: Interner> TyKind<I> {
             | ty::Pat(_, _)
             | ty::Slice(_)
             | ty::RawPtr(_, _)
-            | ty::Ref(_, _, _)
+            | ty::Ref(_, _, _, _)
             | ty::FnDef(_, _)
             | ty::FnPtr(..)
             | ty::UnsafeBinder(_)
@@ -348,7 +348,21 @@ impl<I: Interner> fmt::Debug for TyKind<I> {
             Pat(t, p) => write!(f, "pattern_type!({t:?} is {p:?})"),
             Slice(t) => write!(f, "[{:?}]", &t),
             RawPtr(ty, mutbl) => write!(f, "*{} {:?}", mutbl.ptr_str(), ty),
-            Ref(r, t, m) => write!(f, "&{:?} {}{:?}", r, m.prefix_str(), t),
+            Ref(r, t, m, view) => {
+                write!(f, "&{:?} ", r)?;
+                write!(f, "{} ", m.prefix_str())?;
+                if let Some(v) = view {
+                    write!(f, "{{")?;
+                    for (i, field) in v.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", field)?;
+                    }
+                    write!(f, "}} ")?;
+                }
+                write!(f, "{:?}", t)
+            }
             FnDef(d, s) => f.debug_tuple("FnDef").field(d).field(&s).finish(),
             FnPtr(sig_tys, hdr) => write!(f, "{:?}", sig_tys.with(*hdr)),
             // FIXME(unsafe_binder): print this like `unsafe<'a> T<'a>`.

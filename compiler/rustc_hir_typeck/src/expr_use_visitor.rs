@@ -868,7 +868,7 @@ impl<'tcx, Cx: TypeInformationCtxt<'tcx>, D: Delegate<'tcx>> ExprUseVisitor<'tcx
         &self,
         expr: &hir::Expr<'_>,
         base_place: &PlaceWithHirId<'tcx>,
-        autoref: &adjustment::AutoBorrow,
+        autoref: &adjustment::AutoBorrow<'tcx>,
     ) {
         debug!(
             "walk_autoref(expr.hir_id={} base_place={:?} autoref={:?})",
@@ -876,7 +876,7 @@ impl<'tcx, Cx: TypeInformationCtxt<'tcx>, D: Delegate<'tcx>> ExprUseVisitor<'tcx
         );
 
         match *autoref {
-            adjustment::AutoBorrow::Ref(m) => {
+            adjustment::AutoBorrow::Ref(m, _) => {
                 self.delegate.borrow_mut().borrow(
                     base_place,
                     base_place.hir_id,
@@ -1333,6 +1333,7 @@ impl<'tcx, Cx: TypeInformationCtxt<'tcx>, D: Delegate<'tcx>> ExprUseVisitor<'tcx
                         self.cx.tcx().lifetimes.re_erased,
                         target,
                         deref.mutbl,
+                        None,
                     );
                     self.cat_rvalue(expr.hir_id, ref_ty)
                 } else {
@@ -1544,12 +1545,12 @@ impl<'tcx, Cx: TypeInformationCtxt<'tcx>, D: Delegate<'tcx>> ExprUseVisitor<'tcx
         let place_ty = self.expr_ty(expr)?;
         let base_ty = self.expr_ty_adjusted(base)?;
 
-        let ty::Ref(region, _, mutbl) =
+        let ty::Ref(region, _, mutbl, _) =
             *self.cx.structurally_resolve_type(base.span, base_ty).kind()
         else {
             span_bug!(expr.span, "cat_overloaded_place: base is not a reference");
         };
-        let ref_ty = Ty::new_ref(self.cx.tcx(), region, place_ty, mutbl);
+        let ref_ty = Ty::new_ref(self.cx.tcx(), region, place_ty, mutbl, None);
 
         let base = self.cat_rvalue(expr.hir_id, ref_ty);
         self.cat_deref(expr.hir_id, base)
@@ -1899,7 +1900,7 @@ impl<'tcx, Cx: TypeInformationCtxt<'tcx>, D: Delegate<'tcx>> ExprUseVisitor<'tcx
             // For other types, we create a temporary to match on.
             hir::ByRef::Yes(_, mutability) => {
                 let re_erased = self.cx.tcx().lifetimes.re_erased;
-                let ty = Ty::new_ref(self.cx.tcx(), re_erased, target_ty, mutability);
+                let ty = Ty::new_ref(self.cx.tcx(), re_erased, target_ty, mutability, None);
                 // A deref pattern stores the result of `Deref::deref` or `DerefMut::deref_mut` ...
                 let base = self.cat_rvalue(hir_id, ty);
                 // ... and the inner pattern matches on the place behind that reference.

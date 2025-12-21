@@ -549,7 +549,8 @@ impl<'tcx> rustc_mir_dataflow::Analysis<'tcx> for Borrows<'_, 'tcx> {
     ) {
         match &stmt.kind {
             mir::StatementKind::Assign(box (lhs, rhs)) => {
-                if let mir::Rvalue::Ref(_, _, place) = rhs {
+                // TODO: Implement view types in borrowck.
+                if let mir::Rvalue::Ref(_, _, place, _view) = rhs {
                     if place.ignore_borrow(
                         self.tcx,
                         self.body,

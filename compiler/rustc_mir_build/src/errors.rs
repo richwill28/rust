@@ -616,7 +616,7 @@ impl<'a, G: EmissionGuarantee> Diagnostic<'a, G> for NonExhaustivePatternsTypeNo
             diag.note(fluent::mir_build_type_note);
         }
 
-        if let ty::Ref(_, sub_ty, _) = self.ty.kind() {
+        if let ty::Ref(_, sub_ty, _, _) = self.ty.kind() {
             if !sub_ty.is_inhabited_from(self.cx.tcx, self.cx.module, self.cx.typing_env) {
                 diag.note(fluent::mir_build_reference_note);
             }

@@ -598,7 +598,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                         ] => "",
                         [
                             ..,
-                            Adjustment { kind: Adjust::Borrow(AutoBorrow::Ref(mut_)), target: _ },
+                            Adjustment { kind: Adjust::Borrow(AutoBorrow::Ref(mut_, _)), target: _ },
                         ] => hir::Mutability::from(*mut_).ref_prefix_str(),
                         _ => "",
                     };
@@ -821,7 +821,7 @@ impl<'a, 'tcx> FindInferSourceVisitor<'a, 'tcx> {
                             .sum::<usize>()
                     }
                     ty::Tuple(args) => 5 + args.iter().map(|arg| self.ty_cost(arg)).sum::<usize>(),
-                    ty::Ref(_, ty, _) => 2 + self.ty_cost(ty),
+                    ty::Ref(_, ty, _, _) => 2 + self.ty_cost(ty),
                     ty::Infer(..) => 0,
                     _ => 1,
                 }

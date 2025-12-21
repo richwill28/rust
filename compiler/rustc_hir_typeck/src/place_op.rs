@@ -29,11 +29,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let ok = self.try_overloaded_deref(expr.span, oprnd_ty)?;
         let method = self.register_infer_ok_obligations(ok);
-        if let ty::Ref(_, _, hir::Mutability::Not) = method.sig.inputs()[0].kind() {
+        if let ty::Ref(_, _, hir::Mutability::Not, view) = method.sig.inputs()[0].kind() {
             self.apply_adjustments(
                 oprnd_expr,
                 vec![Adjustment {
-                    kind: Adjust::Borrow(AutoBorrow::Ref(AutoBorrowMutability::Not)),
+                    kind: Adjust::Borrow(AutoBorrow::Ref(AutoBorrowMutability::Not, *view)),
                     target: method.sig.inputs()[0],
                 }],
             );
@@ -164,9 +164,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let method = self.register_infer_ok_obligations(result);
 
                 let mut adjustments = self.adjust_steps(autoderef);
-                if let ty::Ref(region, _, hir::Mutability::Not) = method.sig.inputs()[0].kind() {
+                if let ty::Ref(region, _, hir::Mutability::Not, view) = method.sig.inputs()[0].kind() {
                     adjustments.push(Adjustment {
-                        kind: Adjust::Borrow(AutoBorrow::Ref(AutoBorrowMutability::Not)),
+                        kind: Adjust::Borrow(AutoBorrow::Ref(AutoBorrowMutability::Not, *view)),
                         target: Ty::new_imm_ref(self.tcx, *region, adjusted_ty),
                     });
                 } else {
@@ -307,7 +307,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         )
                     {
                         let method = self.register_infer_ok_obligations(ok);
-                        let ty::Ref(_, _, mutbl) = *method.sig.output().kind() else {
+                        let ty::Ref(_, _, mutbl, _) = *method.sig.output().kind() else {
                             span_bug!(
                                 self.tcx.def_span(method.def_id),
                                 "expected DerefMut to return a &mut"
@@ -392,7 +392,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         debug!("convert_place_op_to_mutable: method={:?}", method);
         self.write_method_call_and_enforce_effects(expr.hir_id, expr.span, method);
 
-        let ty::Ref(region, _, hir::Mutability::Mut) = method.sig.inputs()[0].kind() else {
+        let ty::Ref(region, _, hir::Mutability::Mut, expected_view) = method.sig.inputs()[0].kind() else {
             span_bug!(expr.span, "input to mutable place op is not a mut ref?");
         };
 
@@ -404,7 +404,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         {
             let mut source = base_expr_ty;
             for adjustment in &mut adjustments[..] {
-                if let Adjust::Borrow(AutoBorrow::Ref(..)) = adjustment.kind {
+                if let Adjust::Borrow(AutoBorrow::Ref(_, _)) = adjustment.kind {
                     debug!("convert_place_op_to_mutable: converting autoref {:?}", adjustment);
                     let mutbl = AutoBorrowMutability::Mut {
                         // Deref/indexing can be desugared to a method call,
@@ -413,8 +413,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         // not the case today.
                         allow_two_phase_borrow: AllowTwoPhase::No,
                     };
-                    adjustment.kind = Adjust::Borrow(AutoBorrow::Ref(mutbl));
-                    adjustment.target = Ty::new_ref(self.tcx, *region, source, mutbl.into());
+                    adjustment.kind = Adjust::Borrow(AutoBorrow::Ref(mutbl, *expected_view));
+                    adjustment.target = Ty::new_ref(self.tcx, *region, source, mutbl.into(), *expected_view);
                 }
                 source = adjustment.target;
             }

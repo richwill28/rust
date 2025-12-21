@@ -274,6 +274,7 @@ fn build_adrop_for_coroutine_shim<'tcx>(
             tcx.lifetimes.re_erased,
             BorrowKind::Mut { kind: MutBorrowKind::Default },
             tcx.mk_place_deref(Place::from(cor_ptr_local)),
+            None,
         );
         body.basic_blocks_mut()[START_BLOCK].statements.insert(
             idx,
@@ -361,6 +362,7 @@ fn build_adrop_for_adrop_shim<'tcx>(
         tcx.lifetimes.re_erased,
         BorrowKind::Mut { kind: MutBorrowKind::Default },
         tcx.mk_place_deref(Place::from(cor_ptr_local)),
+        None,
     );
     let cor_ref_place = Place::from(locals.push(LocalDecl::new(cor_ref, span)));
     statements.push(Statement::new(

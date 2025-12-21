@@ -1454,7 +1454,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
         state: &BorrowckDomain,
     ) {
         match rvalue {
-            &Rvalue::Ref(_ /*rgn*/, bk, place) => {
+            // TODO: Implement view types in borrowck.
+            &Rvalue::Ref(_ /*rgn*/, bk, place, _view) => {
                 let access_kind = match bk {
                     BorrowKind::Fake(FakeBorrowKind::Shallow) => {
                         (Shallow(Some(ArtificialField::FakeBorrow)), Read(ReadKind::Borrow(bk)))
@@ -1619,7 +1620,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                 if proj == ProjectionElem::Deref {
                     match place_ref.ty(this.body(), this.infcx.tcx).ty.kind() {
                         // We aren't modifying a variable directly
-                        ty::Ref(_, _, hir::Mutability::Mut) => return,
+                        // TODO: Implement view types in borrowck.
+                        ty::Ref(_, _, hir::Mutability::Mut, _) => return,
 
                         _ => {}
                     }
@@ -1683,7 +1685,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                         match stmt.kind {
                             StatementKind::Assign(box (
                                 _,
-                                Rvalue::Ref(_, _, source)
+                                // TODO: Implement view types in borrowck.
+                                Rvalue::Ref(_, _, source, _)
                                 | Rvalue::Use(Operand::Copy(source) | Operand::Move(source)),
                             )) => {
                                 propagate_closure_used_mut_place(self, source);
@@ -1925,7 +1928,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                     | ty::Pat(_, _)
                     | ty::Slice(_)
                     | ty::RawPtr(_, _)
-                    | ty::Ref(_, _, _)
+                    // TODO: Implement view types in borrowck.
+                    | ty::Ref(_, _, _, _)
                     | ty::FnDef(_, _)
                     | ty::FnPtr(..)
                     | ty::Dynamic(_, _)
@@ -2539,7 +2543,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
 
                         // Check the kind of deref to decide
                         match base_ty.kind() {
-                            ty::Ref(_, _, mutbl) => {
+                            // TODO: Implement view types in borrowck.
+                            ty::Ref(_, _, mutbl, _) => {
                                 match mutbl {
                                     // Shared borrowed data is never mutable
                                     hir::Mutability::Not => Err(place),

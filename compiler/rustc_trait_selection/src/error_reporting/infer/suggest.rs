@@ -536,7 +536,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         expected: Ty<'tcx>,
         found: Ty<'tcx>,
     ) -> Option<SuggestAsRefKind> {
-        if let (ty::Adt(exp_def, exp_args), ty::Ref(_, found_ty, _)) =
+        if let (ty::Adt(exp_def, exp_args), ty::Ref(_, found_ty, _, _)) =
             (expected.kind(), found.kind())
             && let ty::Adt(found_def, found_args) = *found_ty.kind()
         {
@@ -551,7 +551,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     let mut show_suggestion = true;
                     for (exp_ty, found_ty) in std::iter::zip(exp_args.types(), found_args.types()) {
                         match *exp_ty.kind() {
-                            ty::Ref(_, exp_ty, _) => {
+                            ty::Ref(_, exp_ty, _, _) => {
                                 match (exp_ty.kind(), found_ty.kind()) {
                                     (_, ty::Param(_))
                                     | (_, ty::Infer(_))
@@ -691,8 +691,8 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     suggestion += ", ";
                 }
 
-                if let ty::Ref(expected_region, _, _) = expected.kind()
-                    && let ty::Ref(found_region, _, _) = found.kind()
+                if let ty::Ref(expected_region, _, _, _) = expected.kind()
+                    && let ty::Ref(found_region, _, _, _) = found.kind()
                     && expected_region.is_bound()
                     && !found_region.is_bound()
                     && let hir::TyKind::Infer(()) = arg_hir.kind

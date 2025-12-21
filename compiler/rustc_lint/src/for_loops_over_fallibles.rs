@@ -55,7 +55,7 @@ impl<'tcx> LateLintPass<'tcx> for ForLoopsOverFallibles {
 
         let (adt, args, ref_mutability) = match ty.kind() {
             &ty::Adt(adt, args) => (adt, args, None),
-            &ty::Ref(_, ty, mutability) => match ty.kind() {
+            &ty::Ref(_, ty, mutability, _) => match ty.kind() {
                 &ty::Adt(adt, args) => (adt, args, Some(mutability)),
                 _ => return,
             },

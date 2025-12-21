@@ -110,8 +110,16 @@ where
             );
 
         match (call.kind, peek_rval) {
-            (PeekCallKind::ByRef, mir::Rvalue::Ref(_, _, place))
-            | (
+            // TODO: Ignoring view should be sound.
+            (PeekCallKind::ByRef, mir::Rvalue::Ref(_, _, place, _view)) => {
+                let loc = Location { block: bb, statement_index };
+                cursor.seek_before_primary_effect(loc);
+                let state = cursor.get();
+                let analysis = cursor.analysis();
+                analysis.peek_at(tcx, *place, state, call);
+            }
+
+            (
                 PeekCallKind::ByVal,
                 mir::Rvalue::Use(mir::Operand::Move(place) | mir::Operand::Copy(place)),
             ) => {
@@ -154,7 +162,7 @@ enum PeekCallKind {
 impl PeekCallKind {
     fn from_arg_ty(arg: Ty<'_>) -> Self {
         match arg.kind() {
-            ty::Ref(_, _, _) => PeekCallKind::ByRef,
+            ty::Ref(_, _, _, _) => PeekCallKind::ByRef,
             _ => PeekCallKind::ByVal,
         }
     }

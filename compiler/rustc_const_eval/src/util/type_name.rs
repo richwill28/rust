@@ -37,7 +37,7 @@ impl<'tcx> Printer<'tcx> for TypeNamePrinter<'tcx> {
             | ty::Array(_, _)
             | ty::Slice(_)
             | ty::RawPtr(_, _)
-            | ty::Ref(_, _, _)
+            | ty::Ref(_, _, _, _)
             | ty::FnPtr(..)
             | ty::Never
             | ty::Tuple(_)

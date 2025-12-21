@@ -368,11 +368,11 @@ impl<'a, 'tcx> PatCtxt<'a, 'tcx> {
                     match pinnedness {
                         hir::Pinnedness::Pinned
                             if let Some(pty) = ty.pinned_ty()
-                                && let &ty::Ref(_, rty, _) = pty.kind() =>
+                                && let &ty::Ref(_, rty, _, _) = pty.kind() =>
                         {
                             ty = rty;
                         }
-                        hir::Pinnedness::Not if let &ty::Ref(_, rty, _) = ty.kind() => {
+                        hir::Pinnedness::Not if let &ty::Ref(_, rty, _, _) = ty.kind() => {
                             ty = rty;
                         }
                         _ => bug!("`ref {}` has wrong type {}", ident, ty),

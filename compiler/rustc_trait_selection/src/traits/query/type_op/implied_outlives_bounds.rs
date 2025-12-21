@@ -177,7 +177,7 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for ContainsBevyParamSet<'tcx> {
                     return ControlFlow::Break(());
                 }
             }
-            ty::Ref(_, ty, _) => ty.visit_with(self)?,
+            ty::Ref(_, ty, _, _) => ty.visit_with(self)?,
             _ => {}
         }
 

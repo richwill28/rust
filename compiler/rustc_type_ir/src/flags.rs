@@ -328,7 +328,12 @@ impl<I: Interner> FlagComputation<I> {
                 self.add_ty(ty);
             }
 
-            ty::Ref(r, ty, _) => {
+            // Views don't contribute any flags (no types/lifetimes/consts).
+            // This is sound since views are just field-level access metadata.
+            // TODO: If a `HAS_VIEW` flag is added in the future for optimization
+            // purposes (e.g., to quickly check if view-related analysis is needed),
+            // update this to set that flag when `view.is_some()`.
+            ty::Ref(r, ty, _, _view) => {
                 self.add_region(r);
                 self.add_ty(ty);
             }

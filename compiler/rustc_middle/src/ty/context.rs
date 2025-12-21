@@ -160,6 +160,22 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
     type Const = ty::Const<'tcx>;
     type PlaceholderConst = ty::PlaceholderConst;
 
+    type View = &'tcx List<ty::ViewField<'tcx>>;
+    type ViewField = ty::ViewField<'tcx>;
+
+    fn views_may_unify(
+        self,
+        a_view: Option<Self::View>,
+        a_ty: Self::Ty,
+        a_mutbl: rustc_ast_ir::Mutability,
+        b_view: Option<Self::View>,
+        b_ty: Self::Ty,
+        b_mutbl: rustc_ast_ir::Mutability,
+    ) -> bool {
+        use crate::ty::sty::semantically_equivalent_view;
+        semantically_equivalent_view(self, a_view, a_ty, a_mutbl, b_view, b_ty, b_mutbl)
+    }
+
     type ParamConst = ty::ParamConst;
     type BoundConst = ty::BoundConst;
     type ValueConst = ty::Value<'tcx>;
@@ -579,7 +595,7 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
             | ty::Pat(_, _)
             | ty::Slice(_)
             | ty::RawPtr(_, _)
-            | ty::Ref(_, _, _)
+            | ty::Ref(_, _, _, _)
             | ty::FnDef(_, _)
             | ty::FnPtr(..)
             | ty::Dynamic(_, _)
@@ -957,6 +973,7 @@ pub struct CtxtInterners<'tcx> {
     valtree: InternedSet<'tcx, ty::ValTreeKind<'tcx>>,
     patterns: InternedSet<'tcx, List<ty::Pattern<'tcx>>>,
     outlives: InternedSet<'tcx, List<ty::ArgOutlivesPredicate<'tcx>>>,
+    view_fields: InternedSet<'tcx, List<ty::ViewField<'tcx>>>,
 }
 
 impl<'tcx> CtxtInterners<'tcx> {
@@ -994,6 +1011,8 @@ impl<'tcx> CtxtInterners<'tcx> {
             valtree: InternedSet::with_capacity(N),
             patterns: InternedSet::with_capacity(N),
             outlives: InternedSet::with_capacity(N),
+            // TODO: Tune this capacity based on benchmarks once view types see real-world usage.
+            view_fields: InternedSet::with_capacity(N / 4),
         }
     }
 
@@ -2832,6 +2851,7 @@ slice_interners!(
     patterns: pub mk_patterns(Pattern<'tcx>),
     outlives: pub mk_outlives(ty::ArgOutlivesPredicate<'tcx>),
     predefined_opaques_in_body: pub mk_predefined_opaques_in_body((ty::OpaqueTypeKey<'tcx>, Ty<'tcx>)),
+    view_fields: pub mk_view_fields(ty::ViewField<'tcx>),
 );
 
 impl<'tcx> TyCtxt<'tcx> {
@@ -3256,6 +3276,14 @@ impl<'tcx> TyCtxt<'tcx> {
             >,
     {
         T::collect_and_apply(iter, |xs| self.mk_outlives(xs))
+    }
+
+    pub fn mk_view_fields_from_iter<I, T>(self, iter: I) -> T::Output
+    where
+        I: Iterator<Item = T>,
+        T: CollectAndApply<ty::ViewField<'tcx>, &'tcx List<ty::ViewField<'tcx>>>,
+    {
+        T::collect_and_apply(iter, |xs| self.mk_view_fields(xs))
     }
 
     /// Emit a lint at `span` from a lint struct (some type that implements `LintDiagnostic`,

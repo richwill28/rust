@@ -255,7 +255,7 @@ fn visit_implementation_of_dispatch_from_dyn(checker: &Checker<'_>) -> Result<()
             Ok(())
         }
 
-        (&ty::Ref(r_a, _, mutbl_a), ty::Ref(r_b, _, mutbl_b))
+        (&ty::Ref(r_a, _, mutbl_a, _), ty::Ref(r_b, _, mutbl_b, _))
             if r_a == *r_b && mutbl_a == *mutbl_b =>
         {
             Ok(())
@@ -432,14 +432,14 @@ pub(crate) fn coerce_unsized_info<'tcx>(
             (ty_a, ty_b, coerce_unsized_trait, None, span)
         }
 
-        (&ty::Ref(r_a, ty_a, mutbl_a), &ty::Ref(r_b, ty_b, mutbl_b)) => {
+        (&ty::Ref(r_a, ty_a, mutbl_a, _), &ty::Ref(r_b, ty_b, mutbl_b, _)) => {
             infcx.sub_regions(SubregionOrigin::RelateObjectBound(span), r_b, r_a);
             let mt_a = ty::TypeAndMut { ty: ty_a, mutbl: mutbl_a };
             let mt_b = ty::TypeAndMut { ty: ty_b, mutbl: mutbl_b };
             check_mutbl(mt_a, mt_b, &|ty| Ty::new_imm_ref(tcx, r_b, ty))
         }
 
-        (&ty::Ref(_, ty_a, mutbl_a), &ty::RawPtr(ty_b, mutbl_b))
+        (&ty::Ref(_, ty_a, mutbl_a, _), &ty::RawPtr(ty_b, mutbl_b))
         | (&ty::RawPtr(ty_a, mutbl_a), &ty::RawPtr(ty_b, mutbl_b)) => {
             let mt_a = ty::TypeAndMut { ty: ty_a, mutbl: mutbl_a };
             let mt_b = ty::TypeAndMut { ty: ty_b, mutbl: mutbl_b };

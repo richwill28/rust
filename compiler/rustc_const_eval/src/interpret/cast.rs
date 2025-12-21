@@ -472,7 +472,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                 let cast_ty = self.layout_of(cast_ty)?;
                 self.unsize_into(&src, cast_ty, &dest)
             }
-            (&ty::Ref(_, s, _), &ty::Ref(_, c, _) | &ty::RawPtr(c, _))
+            (&ty::Ref(_, s, _, _), &ty::Ref(_, c, _, _) | &ty::RawPtr(c, _))
             | (&ty::RawPtr(s, _), &ty::RawPtr(c, _)) => self.unsize_into_ptr(src, dest, s, c),
             (&ty::Adt(def_a, _), &ty::Adt(def_b, _)) => {
                 assert_eq!(def_a, def_b); // implies same number of fields

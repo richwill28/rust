@@ -160,15 +160,34 @@ fn push_debuginfo_type_name<'tcx>(
                 push_close_angle_bracket(cpp_like_debuginfo, output);
             }
         }
-        ty::Ref(_, inner_type, mutbl) => {
+        ty::Ref(_, inner_type, mutbl, view) => {
             if cpp_like_debuginfo {
                 match mutbl {
                     Mutability::Not => output.push_str("ref$<"),
                     Mutability::Mut => output.push_str("ref_mut$<"),
                 }
+                // TODO: Consider encoding view info in MSVC format, perhaps as a separate template parameter
             } else {
                 output.push('&');
                 output.push_str(mutbl.prefix_str());
+                if let Some(view_fields) = view {
+                    output.push('{');
+                    let mut first = true;
+                    for field in view_fields.iter() {
+                        if !first {
+                            output.push_str(", ");
+                        }
+                        first = false;
+                        output.push_str(field.mutbl.prefix_str());
+                        for (i, &segment) in field.path.iter().enumerate() {
+                            if i > 0 {
+                                output.push('.');
+                            }
+                            output.push_str(segment.as_str());
+                        }
+                    }
+                    output.push_str("} ");
+                }
             }
 
             push_debuginfo_type_name(tcx, inner_type, qualified, output, visited);

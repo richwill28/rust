@@ -433,10 +433,12 @@ pub enum ExprKind<'tcx> {
         /// HirId of the root variable
         var_hir_id: LocalVarId,
     },
-    /// A borrow, e.g. `&arg`.
+    /// A borrow, e.g. `&arg` or `&{field} arg`.
     Borrow {
         borrow_kind: BorrowKind,
         arg: ExprId,
+        /// Optional view restriction on the borrow (e.g., `{field}` in `&{field} arg`).
+        view: Option<ty::View<'tcx>>,
     },
     /// A `&raw [const|mut] $place_expr` raw borrow resulting in type `*[const|mut] T`.
     RawBorrow {

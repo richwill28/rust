@@ -409,10 +409,11 @@ impl<'a> State<'a> {
             hir::TyKind::Ref(lifetime, ref mt, ref view) => {
                 self.word("&");
                 self.print_opt_lifetime(lifetime);
-                self.print_mt(mt, false);
+                self.print_mutability(mt.mutbl, false);
                 if let Some(view) = view {
                     self.print_view(view);
                 }
+                self.print_type(mt.ty);
             }
             hir::TyKind::Never => {
                 self.word("!");

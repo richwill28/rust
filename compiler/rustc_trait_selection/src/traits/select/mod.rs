@@ -2206,7 +2206,7 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
             | ty::Char
             | ty::RawPtr(..)
             | ty::Never
-            | ty::Ref(_, _, hir::Mutability::Not)
+            | ty::Ref(_, _, hir::Mutability::Not, _)
             | ty::Array(..) => {
                 unreachable!("tried to assemble `Sized` for type with libcore-provided impl")
             }
@@ -2265,7 +2265,7 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
             | ty::Param(..)
             | ty::Placeholder(..)
             | ty::Bound(..)
-            | ty::Ref(_, _, ty::Mutability::Mut)
+            | ty::Ref(_, _, ty::Mutability::Mut, _)
             | ty::Infer(ty::TyVar(_) | ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)) => {
                 bug!("asked to assemble builtin bounds of unexpected type: {:?}", self_ty);
             }
@@ -2333,7 +2333,7 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
                 bug!("asked to assemble constituent types of unexpected type: {:?}", t);
             }
 
-            ty::RawPtr(element_ty, _) | ty::Ref(_, element_ty, _) => {
+            ty::RawPtr(element_ty, _) | ty::Ref(_, element_ty, _, _) => {
                 ty::Binder::dummy(AutoImplConstituents {
                     types: vec![element_ty],
                     assumptions: vec![],

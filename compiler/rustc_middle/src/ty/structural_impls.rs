@@ -397,8 +397,8 @@ impl<'tcx> TypeSuperFoldable<TyCtxt<'tcx>> for Ty<'tcx> {
             ty::FnDef(def_id, args) => ty::FnDef(def_id, args.try_fold_with(folder)?),
             ty::FnPtr(sig_tys, hdr) => ty::FnPtr(sig_tys.try_fold_with(folder)?, hdr),
             ty::UnsafeBinder(f) => ty::UnsafeBinder(f.try_fold_with(folder)?),
-            ty::Ref(r, ty, mutbl) => {
-                ty::Ref(r.try_fold_with(folder)?, ty.try_fold_with(folder)?, mutbl)
+            ty::Ref(r, ty, mutbl, view) => {
+                ty::Ref(r.try_fold_with(folder)?, ty.try_fold_with(folder)?, mutbl, view)
             }
             ty::Coroutine(did, args) => ty::Coroutine(did, args.try_fold_with(folder)?),
             ty::CoroutineWitness(did, args) => {
@@ -442,7 +442,7 @@ impl<'tcx> TypeSuperFoldable<TyCtxt<'tcx>> for Ty<'tcx> {
             ty::FnDef(def_id, args) => ty::FnDef(def_id, args.fold_with(folder)),
             ty::FnPtr(sig_tys, hdr) => ty::FnPtr(sig_tys.fold_with(folder), hdr),
             ty::UnsafeBinder(f) => ty::UnsafeBinder(f.fold_with(folder)),
-            ty::Ref(r, ty, mutbl) => ty::Ref(r.fold_with(folder), ty.fold_with(folder), mutbl),
+            ty::Ref(r, ty, mutbl, view) => ty::Ref(r.fold_with(folder), ty.fold_with(folder), mutbl, view),
             ty::Coroutine(did, args) => ty::Coroutine(did, args.fold_with(folder)),
             ty::CoroutineWitness(did, args) => ty::CoroutineWitness(did, args.fold_with(folder)),
             ty::Closure(did, args) => ty::Closure(did, args.fold_with(folder)),
@@ -487,7 +487,7 @@ impl<'tcx> TypeSuperVisitable<TyCtxt<'tcx>> for Ty<'tcx> {
             ty::FnDef(_, args) => args.visit_with(visitor),
             ty::FnPtr(sig_tys, _) => sig_tys.visit_with(visitor),
             ty::UnsafeBinder(f) => f.visit_with(visitor),
-            ty::Ref(r, ty, _) => {
+            ty::Ref(r, ty, _, _) => {
                 try_visit!(r.visit_with(visitor));
                 ty.visit_with(visitor)
             }
@@ -760,6 +760,19 @@ impl<'tcx, T: TypeFoldable<TyCtxt<'tcx>> + Debug + Clone> TypeFoldable<TyCtxt<'t
 }
 
 impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for &'tcx ty::List<LocalDefId> {
+    fn try_fold_with<F: FallibleTypeFolder<TyCtxt<'tcx>>>(
+        self,
+        _folder: &mut F,
+    ) -> Result<Self, F::Error> {
+        Ok(self)
+    }
+
+    fn fold_with<F: TypeFolder<TyCtxt<'tcx>>>(self, _folder: &mut F) -> Self {
+        self
+    }
+}
+
+impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for &'tcx ty::List<ty::ViewField<'tcx>> {
     fn try_fold_with<F: FallibleTypeFolder<TyCtxt<'tcx>>>(
         self,
         _folder: &mut F,

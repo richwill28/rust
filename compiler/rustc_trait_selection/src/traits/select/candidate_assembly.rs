@@ -693,7 +693,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 | ty::Pat(_, _)
                 | ty::Slice(_)
                 | ty::RawPtr(_, _)
-                | ty::Ref(_, _, _)
+                | ty::Ref(_, _, _, _)
                 | ty::Closure(..)
                 | ty::CoroutineClosure(..)
                 | ty::Coroutine(_, _)
@@ -1145,7 +1145,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             | ty::Char
             | ty::RawPtr(..)
             | ty::Never
-            | ty::Ref(_, _, hir::Mutability::Not)
+            | ty::Ref(_, _, hir::Mutability::Not, _)
             | ty::Array(..) => {}
 
             // FIXME(unsafe_binder): Should we conditionally
@@ -1156,7 +1156,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             ty::Dynamic(..) | ty::Str | ty::Slice(..) | ty::Foreign(..) => {}
 
             // Not `Copy` or `Clone` by design.
-            ty::Ref(_, _, hir::Mutability::Mut) => {}
+            ty::Ref(_, _, hir::Mutability::Mut, _) => {}
 
             ty::Coroutine(coroutine_def_id, args) => {
                 if self.should_stall_coroutine(coroutine_def_id) {
@@ -1326,7 +1326,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             | ty::Array(_, _)
             | ty::Slice(_)
             | ty::RawPtr(_, _)
-            | ty::Ref(_, _, _)
+            | ty::Ref(_, _, _, _)
             | ty::FnDef(_, _)
             | ty::Pat(_, _)
             | ty::FnPtr(..)

@@ -788,7 +788,7 @@ impl<'tcx> interpret::Machine<'tcx> for CompileTimeMachine<'tcx> {
     ) -> InterpResult<'tcx, ImmTy<'tcx, CtfeProvenance>> {
         // If it's a frozen shared reference that's not already immutable, potentially make it immutable.
         // (Do nothing on `None` provenance, that cannot store immutability anyway.)
-        if let ty::Ref(_, ty, mutbl) = val.layout.ty.kind()
+        if let ty::Ref(_, ty, mutbl, _) = val.layout.ty.kind()
             && *mutbl == Mutability::Not
             && val
                 .to_scalar_and_meta()

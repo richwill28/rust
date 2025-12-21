@@ -254,7 +254,8 @@ impl<'a, 'tcx> LoanInvalidationsGenerator<'a, 'tcx> {
     // Simulates consumption of an rvalue
     fn consume_rvalue(&mut self, location: Location, rvalue: &Rvalue<'tcx>) {
         match rvalue {
-            &Rvalue::Ref(_ /*rgn*/, bk, place) => {
+            // TODO: Implement view types in borrowck.
+            &Rvalue::Ref(_ /*rgn*/, bk, place, _view) => {
                 let access_kind = match bk {
                     BorrowKind::Fake(FakeBorrowKind::Shallow) => {
                         (Shallow(Some(ArtificialField::FakeBorrow)), Read(ReadKind::Borrow(bk)))

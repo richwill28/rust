@@ -417,7 +417,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             }
 
             // Do not try creating references (#67862)
-            Rvalue::RawPtr(_, place) | Rvalue::Ref(_, _, place) => {
+            Rvalue::RawPtr(_, place) | Rvalue::Ref(_, _, place, _) => {
                 trace!("skipping RawPtr | Ref for {:?}", place);
 
                 // This may be creating mutable references or immutable references to cells.

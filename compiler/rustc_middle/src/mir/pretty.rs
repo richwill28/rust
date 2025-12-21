@@ -1110,7 +1110,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                 let muta = tcx.static_mutability(did).unwrap().prefix_str();
                 write!(fmt, "&/*tls*/ {}{}", muta, tcx.def_path_str(did))
             }),
-            Ref(region, borrow_kind, ref place) => {
+            Ref(region, borrow_kind, ref place, view) => {
                 let kind_str = match borrow_kind {
                     BorrowKind::Shared => "",
                     BorrowKind::Fake(FakeBorrowKind::Deep) => "fake ",
@@ -1132,7 +1132,28 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                     // Do not even print 'static
                     String::new()
                 };
-                write!(fmt, "&{region}{kind_str}{place:?}")
+
+                let view_str = if let Some(view) = view {
+                    let mut result = String::from("{");
+                    for (i, field) in view.iter().enumerate() {
+                        if i > 0 {
+                            result.push_str(", ");
+                        }
+                        result.push_str(field.mutbl.prefix_str());
+                        for (j, segment) in field.path.iter().enumerate() {
+                            if j > 0 {
+                                result.push('.');
+                            }
+                            result.push_str(segment.as_str());
+                        }
+                    }
+                    result.push_str("} ");
+                    result
+                } else {
+                    String::new()
+                };
+
+                write!(fmt, "&{region}{kind_str}{view_str}{place:?}")
             }
 
             CopyForDeref(ref place) => write!(fmt, "deref_copy {place:#?}"),
@@ -1879,13 +1900,13 @@ fn pretty_print_const_value_tcx<'tcx>(
     let u8_type = tcx.types.u8;
     match (ct, ty.kind()) {
         // Byte/string slices, printed as (byte) string literals.
-        (_, ty::Ref(_, inner_ty, _)) if matches!(inner_ty.kind(), ty::Str) => {
+        (_, ty::Ref(_, inner_ty, _, _)) if matches!(inner_ty.kind(), ty::Str) => {
             if let Some(data) = ct.try_get_slice_bytes_for_diagnostics(tcx) {
                 fmt.write_str(&format!("{:?}", String::from_utf8_lossy(data)))?;
                 return Ok(());
             }
         }
-        (_, ty::Ref(_, inner_ty, _)) if matches!(inner_ty.kind(), ty::Slice(t) if *t == u8_type) => {
+        (_, ty::Ref(_, inner_ty, _, _)) if matches!(inner_ty.kind(), ty::Slice(t) if *t == u8_type) => {
             if let Some(data) = ct.try_get_slice_bytes_for_diagnostics(tcx) {
                 pretty_print_byte_str(fmt, data)?;
                 return Ok(());

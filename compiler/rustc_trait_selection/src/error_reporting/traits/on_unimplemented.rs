@@ -245,7 +245,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             }
 
             // `&[{integral}]` - `FromIterator` needs that.
-            if let ty::Ref(_, ref_ty, rustc_ast::Mutability::Not) = self_ty.kind()
+            if let ty::Ref(_, ref_ty, rustc_ast::Mutability::Not, _) = self_ty.kind()
                 && let ty::Slice(sty) = ref_ty.kind()
                 && sty.is_integral()
             {

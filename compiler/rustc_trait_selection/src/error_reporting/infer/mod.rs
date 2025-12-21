@@ -895,6 +895,16 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             format!("&{r}")
         }
 
+        fn fmt_view<'tcx>(view: Option<&'tcx ty::List<ty::ViewField<'tcx>>>) -> String {
+            match view {
+                None => String::new(),
+                Some(fields) => {
+                    let field_strs: Vec<_> = fields.iter().map(|f| f.to_string()).collect();
+                    format!("{{{}}}", field_strs.join(", "))
+                }
+            }
+        }
+
         fn push_ref<'tcx>(
             region: ty::Region<'tcx>,
             mutbl: hir::Mutability,
@@ -926,6 +936,8 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             mut1: hir::Mutability,
             r2: ty::Region<'tcx>,
             mut2: hir::Mutability,
+            view1: Option<&'tcx ty::List<ty::ViewField<'tcx>>>,
+            view2: Option<&'tcx ty::List<ty::ViewField<'tcx>>>,
             ss: &mut (DiagStyledString, DiagStyledString),
         ) {
             let (r1, r2) = (fmt_region(r1), fmt_region(r2));
@@ -943,6 +955,17 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             } else {
                 ss.0.push_normal(mut1.prefix_str());
                 ss.1.push_normal(mut2.prefix_str());
+            }
+
+            if view1 != view2 {
+                let v1 = fmt_view(view1);
+                let v2 = fmt_view(view2);
+                if !v1.is_empty() {
+                    ss.0.push_highlighted(v1);
+                }
+                if !v2.is_empty() {
+                    ss.1.push_highlighted(v2);
+                }
             }
         }
 
@@ -1147,20 +1170,20 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             }
 
             // When finding `&T != &T`, compare the references, then recurse into pointee type
-            (&ty::Ref(r1, ref_ty1, mutbl1), &ty::Ref(r2, ref_ty2, mutbl2)) => {
+            (&ty::Ref(r1, ref_ty1, mutbl1, view1), &ty::Ref(r2, ref_ty2, mutbl2, view2)) => {
                 let mut values = (DiagStyledString::new(), DiagStyledString::new());
-                cmp_ty_refs(r1, mutbl1, r2, mutbl2, &mut values);
+                cmp_ty_refs(r1, mutbl1, r2, mutbl2, view1, view2, &mut values);
                 recurse(ref_ty1, ref_ty2, &mut values);
                 values
             }
             // When finding T != &T, highlight the borrow
-            (&ty::Ref(r1, ref_ty1, mutbl1), _) => {
+            (&ty::Ref(r1, ref_ty1, mutbl1, _view1), _) => {
                 let mut values = (DiagStyledString::new(), DiagStyledString::new());
                 push_ref(r1, mutbl1, &mut values.0);
                 recurse(ref_ty1, t2, &mut values);
                 values
             }
-            (_, &ty::Ref(r2, ref_ty2, mutbl2)) => {
+            (_, &ty::Ref(r2, ref_ty2, mutbl2, _view2)) => {
                 let mut values = (DiagStyledString::new(), DiagStyledString::new());
                 push_ref(r2, mutbl2, &mut values.1);
                 recurse(t1, ref_ty2, &mut values);
@@ -1774,7 +1797,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 // If a character was expected and the found expression is a string literal
                 // containing a single character, perhaps the user meant to write `'c'` to
                 // specify a character literal (issue #92479)
-                (ty::Char, ty::Ref(_, r, _)) if r.is_str() => {
+                (ty::Char, ty::Ref(_, r, _, _)) if r.is_str() => {
                     if let Ok(code) = self.tcx.sess().source_map().span_to_snippet(span)
                         && let Some(code) = code.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
                         && code.chars().count() == 1
@@ -1787,7 +1810,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 }
                 // If a string was expected and the found expression is a character literal,
                 // perhaps the user meant to write `"s"` to specify a string literal.
-                (ty::Ref(_, r, _), ty::Char) if r.is_str() => {
+                (ty::Ref(_, r, _, _), ty::Char) if r.is_str() => {
                     if let Ok(code) = self.tcx.sess().source_map().span_to_snippet(span)
                         && code.starts_with("'")
                         && code.ends_with("'")

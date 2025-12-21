@@ -200,10 +200,11 @@ impl<'tcx> Stable<'tcx> for mir::Rvalue<'tcx> {
                 let len = len.stable(tables, cx);
                 crate::mir::Rvalue::Repeat(op.stable(tables, cx), len)
             }
-            Ref(region, kind, place) => crate::mir::Rvalue::Ref(
+            Ref(region, kind, place, view) => crate::mir::Rvalue::Ref(
                 region.stable(tables, cx),
                 kind.stable(tables, cx),
                 place.stable(tables, cx),
+                view.map(|v| v.stable(tables, cx)),
             ),
             ThreadLocalRef(def_id) => {
                 crate::mir::Rvalue::ThreadLocalRef(tables.crate_item(*def_id))
