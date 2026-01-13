@@ -1332,7 +1332,7 @@ pub(crate) fn clean_middle_assoc_item(assoc_item: &ty::AssocItem, cx: &mut DocCo
                     tcx.fn_sig(assoc_item.def_id).instantiate_identity().input(0).skip_binder();
                 if self_param_ty == self_ty {
                     item.decl.inputs[0].type_ = SelfTy;
-                } else if let ty::Ref(_, ty, _) = *self_param_ty.kind()
+                } else if let ty::Ref(_, ty, _, _) = *self_param_ty.kind()
                     && ty == self_ty
                 {
                     match item.decl.inputs[0].type_ {
@@ -2045,7 +2045,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
         ty::RawPtr(ty, mutbl) => {
             RawPointer(mutbl, Box::new(clean_middle_ty(bound_ty.rebind(ty), cx, None, None)))
         }
-        ty::Ref(r, ty, mutbl) => BorrowedRef {
+        ty::Ref(r, ty, mutbl, _) => BorrowedRef {
             lifetime: clean_middle_region(r, cx),
             mutability: mutbl,
             type_: Box::new(clean_middle_ty(
