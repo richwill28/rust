@@ -172,10 +172,22 @@ impl<'tcx> ThirBuildCx<'tcx> {
                     deref.span,
                 )
             }
-            Adjust::Borrow(AutoBorrow::Ref(m, view)) => ExprKind::Borrow {
-                borrow_kind: m.to_borrow_kind(),
-                arg: self.thir.exprs.push(expr),
-                view,
+            Adjust::Borrow(AutoBorrow::Ref(m, view)) => {
+                let borrow_kind = m.to_borrow_kind();
+                let mir_view = view.map(|v| {
+                    let base_view = self.tcx.ty_view_to_mir_view(v);
+                    // If this is a two-phase borrow, propagate that into the view.
+                    if matches!(borrow_kind, BorrowKind::Mut { kind: mir::MutBorrowKind::TwoPhaseBorrow }) {
+                        self.tcx.propagate_two_phase_to_view(base_view)
+                    } else {
+                        base_view
+                    }
+                });
+                ExprKind::Borrow {
+                    borrow_kind,
+                    arg: self.thir.exprs.push(expr),
+                    view: mir_view,
+                }
             },
             Adjust::Borrow(AutoBorrow::RawPtr(mutability)) => {
                 ExprKind::RawBorrow { mutability, arg: self.thir.exprs.push(expr) }

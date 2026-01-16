@@ -785,6 +785,19 @@ impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for &'tcx ty::List<ty::ViewField<'tcx>> {
     }
 }
 
+impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for &'tcx ty::List<crate::mir::ViewField<'tcx>> {
+    fn try_fold_with<F: FallibleTypeFolder<TyCtxt<'tcx>>>(
+        self,
+        _folder: &mut F,
+    ) -> Result<Self, F::Error> {
+        Ok(self)
+    }
+
+    fn fold_with<F: TypeFolder<TyCtxt<'tcx>>>(self, _folder: &mut F) -> Self {
+        self
+    }
+}
+
 macro_rules! list_fold {
     ($($ty:ty : $mk:ident),+ $(,)?) => {
         $(

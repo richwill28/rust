@@ -67,7 +67,7 @@ use crate::metadata::ModChild;
 use crate::middle::codegen_fn_attrs::{CodegenFnAttrs, TargetFeature};
 use crate::middle::resolve_bound_vars;
 use crate::mir::interpret::{self, Allocation, ConstAllocation};
-use crate::mir::{Body, Local, Place, PlaceElem, ProjectionKind, Promoted};
+use crate::mir::{self, Body, Local, Place, PlaceElem, ProjectionKind, Promoted};
 use crate::query::plumbing::QuerySystem;
 use crate::query::{IntoQueryParam, LocalCrate, Providers, TyCtxtAt};
 use crate::thir::Thir;
@@ -974,6 +974,7 @@ pub struct CtxtInterners<'tcx> {
     patterns: InternedSet<'tcx, List<ty::Pattern<'tcx>>>,
     outlives: InternedSet<'tcx, List<ty::ArgOutlivesPredicate<'tcx>>>,
     view_fields: InternedSet<'tcx, List<ty::ViewField<'tcx>>>,
+    mir_view_fields: InternedSet<'tcx, List<mir::ViewField<'tcx>>>,
 }
 
 impl<'tcx> CtxtInterners<'tcx> {
@@ -1013,6 +1014,7 @@ impl<'tcx> CtxtInterners<'tcx> {
             outlives: InternedSet::with_capacity(N),
             // TODO: Tune this capacity based on benchmarks once view types see real-world usage.
             view_fields: InternedSet::with_capacity(N / 4),
+            mir_view_fields: InternedSet::with_capacity(N / 4),
         }
     }
 
@@ -2852,6 +2854,7 @@ slice_interners!(
     outlives: pub mk_outlives(ty::ArgOutlivesPredicate<'tcx>),
     predefined_opaques_in_body: pub mk_predefined_opaques_in_body((ty::OpaqueTypeKey<'tcx>, Ty<'tcx>)),
     view_fields: pub mk_view_fields(ty::ViewField<'tcx>),
+    mir_view_fields: pub mk_mir_view_fields(mir::ViewField<'tcx>),
 );
 
 impl<'tcx> TyCtxt<'tcx> {
@@ -3284,6 +3287,51 @@ impl<'tcx> TyCtxt<'tcx> {
         T: CollectAndApply<ty::ViewField<'tcx>, &'tcx List<ty::ViewField<'tcx>>>,
     {
         T::collect_and_apply(iter, |xs| self.mk_view_fields(xs))
+    }
+
+    pub fn mk_mir_view_fields_from_iter<I, T>(self, iter: I) -> T::Output
+    where
+        I: Iterator<Item = T>,
+        T: CollectAndApply<mir::ViewField<'tcx>, &'tcx List<mir::ViewField<'tcx>>>,
+    {
+        T::collect_and_apply(iter, |xs| self.mk_mir_view_fields(xs))
+    }
+
+    /// Convert a type-level view to a MIR-level view.
+    /// This converts `Mutability` to the corresponding `BorrowKind`.
+    pub fn ty_view_to_mir_view(self, ty_view: ty::View<'tcx>) -> mir::View<'tcx> {
+        let fields: Vec<_> = ty_view
+            .iter()
+            .map(|f| mir::ViewField::from_ty_view_field(f))
+            .collect();
+        self.mk_mir_view_fields(&fields)
+    }
+
+    /// Convert a MIR-level view back to a type-level view.
+    /// This loses information about two-phase borrows, fake borrows, etc.
+    pub fn mir_view_to_ty_view(self, mir_view: mir::View<'tcx>) -> ty::View<'tcx> {
+        let fields: Vec<_> = mir_view.iter().map(|f| f.to_ty_view_field()).collect();
+        self.mk_view_fields(&fields)
+    }
+
+    /// Propagate two-phase borrow semantics into a MIR view.
+    /// Converts all mutable borrows in the view to two-phase borrows.
+    /// This is used when the outer borrow is a two-phase borrow, so all
+    /// field-level borrows within the view should also be two-phase.
+    pub fn propagate_two_phase_to_view(self, mir_view: mir::View<'tcx>) -> mir::View<'tcx> {
+        let fields: Vec<_> = mir_view
+            .iter()
+            .map(|f| {
+                let kind = match f.kind {
+                    mir::BorrowKind::Mut { kind: mir::MutBorrowKind::Default } => {
+                        mir::BorrowKind::Mut { kind: mir::MutBorrowKind::TwoPhaseBorrow }
+                    }
+                    other => other,
+                };
+                mir::ViewField::new(f.path, kind)
+            })
+            .collect();
+        self.mk_mir_view_fields(&fields)
     }
 
     /// Emit a lint at `span` from a lint struct (some type that implements `LintDiagnostic`,

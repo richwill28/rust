@@ -777,7 +777,8 @@ impl<'tcx> Rvalue<'tcx> {
             Rvalue::ThreadLocalRef(did) => tcx.thread_local_ptr_ty(did),
             Rvalue::Ref(reg, bk, ref place, ref view) => {
                 let place_ty = place.ty(local_decls, tcx).ty;
-                Ty::new_ref(tcx, reg, place_ty, bk.to_mutbl_lossy(), *view)
+                let ty_view = view.map(|v| tcx.mir_view_to_ty_view(v));
+                Ty::new_ref(tcx, reg, place_ty, bk.to_mutbl_lossy(), ty_view)
             }
             Rvalue::RawPtr(kind, ref place) => {
                 let place_ty = place.ty(local_decls, tcx).ty;

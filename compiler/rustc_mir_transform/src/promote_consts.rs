@@ -891,8 +891,9 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
             let ty = local_decls[place.local].ty;
             let span = statement.source_info.span;
 
+            let ty_view = view.map(|v| tcx.mir_view_to_ty_view(v));
             let ref_ty =
-                Ty::new_ref(tcx, tcx.lifetimes.re_erased, ty, borrow_kind.to_mutbl_lossy(), *view);
+                Ty::new_ref(tcx, tcx.lifetimes.re_erased, ty, borrow_kind.to_mutbl_lossy(), ty_view);
 
             let mut projection = vec![PlaceElem::Deref];
             projection.extend(place.projection);

@@ -498,6 +498,15 @@ impl<'tcx, D: TyDecoder<'tcx>> RefDecodable<'tcx, D> for ty::List<ty::ViewField<
     }
 }
 
+impl<'tcx, D: TyDecoder<'tcx>> RefDecodable<'tcx, D> for ty::List<mir::ViewField<'tcx>> {
+    fn decode(decoder: &mut D) -> &'tcx Self {
+        let len = decoder.read_usize();
+        decoder.interner().mk_mir_view_fields_from_iter(
+            (0..len).map::<mir::ViewField<'tcx>, _>(|_| Decodable::decode(decoder)),
+        )
+    }
+}
+
 impl_decodable_via_ref! {
     &'tcx ty::TypeckResults<'tcx>,
     &'tcx ty::List<Ty<'tcx>>,
@@ -508,6 +517,7 @@ impl_decodable_via_ref! {
     &'tcx ty::List<ty::Pattern<'tcx>>,
     &'tcx ty::ListWithCachedTypeInfo<ty::Clause<'tcx>>,
     &'tcx ty::List<ty::ViewField<'tcx>>,
+    &'tcx ty::List<mir::ViewField<'tcx>>,
 }
 
 #[macro_export]

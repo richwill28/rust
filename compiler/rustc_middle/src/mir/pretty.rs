@@ -1139,7 +1139,22 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                         if i > 0 {
                             result.push_str(", ");
                         }
-                        result.push_str(field.mutbl.prefix_str());
+                        match field.kind {
+                            BorrowKind::Shared => {}
+                            BorrowKind::Fake(FakeBorrowKind::Deep) => result.push_str("fake "),
+                            BorrowKind::Fake(FakeBorrowKind::Shallow) => {
+                                result.push_str("fake shallow ")
+                            }
+                            BorrowKind::Mut { kind: MutBorrowKind::Default } => {
+                                result.push_str("mut ")
+                            }
+                            BorrowKind::Mut { kind: MutBorrowKind::TwoPhaseBorrow } => {
+                                result.push_str("two-phase ")
+                            }
+                            BorrowKind::Mut { kind: MutBorrowKind::ClosureCapture } => {
+                                result.push_str("uniq ")
+                            }
+                        }
                         for (j, segment) in field.path.iter().enumerate() {
                             if j > 0 {
                                 result.push('.');

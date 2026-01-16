@@ -1164,3 +1164,31 @@ impl<'tcx> Stable<'tcx> for rustc_middle::ty::View<'tcx> {
         self.iter().map(|field| field.stable(tables, cx)).collect()
     }
 }
+
+impl<'tcx> Stable<'tcx> for rustc_middle::mir::ViewField<'tcx> {
+    type T = crate::ty::ViewField;
+
+    fn stable<'cx>(
+        &self,
+        _tables: &mut Tables<'cx, BridgeTys>,
+        _cx: &CompilerCtxt<'cx, BridgeTys>,
+    ) -> Self::T {
+        crate::ty::ViewField {
+            path: self.path.iter().map(|s| s.to_string()).collect(),
+            // Convert BorrowKind to Mutability (lossy conversion)
+            mutbl: self.kind.to_mutbl_lossy().stable(_tables, _cx),
+        }
+    }
+}
+
+impl<'tcx> Stable<'tcx> for rustc_middle::mir::View<'tcx> {
+    type T = crate::ty::View;
+
+    fn stable<'cx>(
+        &self,
+        tables: &mut Tables<'cx, BridgeTys>,
+        cx: &CompilerCtxt<'cx, BridgeTys>,
+    ) -> Self::T {
+        self.iter().map(|field| field.stable(tables, cx)).collect()
+    }
+}

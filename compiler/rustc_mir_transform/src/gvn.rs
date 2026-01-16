@@ -1039,7 +1039,8 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
             Rvalue::Aggregate(..) => return self.simplify_aggregate(lhs, rvalue, location),
             Rvalue::Ref(_, borrow_kind, ref mut place, view) => {
                 self.simplify_place_projection(place, location);
-                return self.new_pointer(*place, AddressKind::Ref(borrow_kind), view);
+                let ty_view = view.map(|v| self.tcx.mir_view_to_ty_view(v));
+                return self.new_pointer(*place, AddressKind::Ref(borrow_kind), ty_view);
             }
             Rvalue::RawPtr(mutbl, ref mut place) => {
                 self.simplify_place_projection(place, location);

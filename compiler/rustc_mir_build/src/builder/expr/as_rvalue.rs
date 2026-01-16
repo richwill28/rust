@@ -6,7 +6,7 @@ use rustc_index::{Idx, IndexVec};
 use rustc_middle::bug;
 use rustc_middle::middle::region::{self, TempLifetime};
 use rustc_middle::mir::interpret::Scalar;
-use rustc_middle::mir::*;
+use rustc_middle::mir::{self as mir, *};
 use rustc_middle::thir::*;
 use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::cast::{CastTy, mir_cast_kind};
@@ -713,7 +713,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         temp_lifetime: Option<region::Scope>,
         mut block: BasicBlock,
         arg: ExprId,
-        view: Option<ty::View<'tcx>>,
+        view: Option<mir::View<'tcx>>,
     ) -> BlockAnd<Operand<'tcx>> {
         let this = self; // See "LET_THIS_SELF".
 
