@@ -1115,7 +1115,9 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                     BorrowKind::Shared => "",
                     BorrowKind::Fake(FakeBorrowKind::Deep) => "fake ",
                     BorrowKind::Fake(FakeBorrowKind::Shallow) => "fake shallow ",
-                    BorrowKind::Mut { .. } => "mut ",
+                    BorrowKind::Mut { kind: MutBorrowKind::Default } => "mut ",
+                    BorrowKind::Mut { kind: MutBorrowKind::TwoPhaseBorrow } => "two-phase ",
+                    BorrowKind::Mut { kind: MutBorrowKind::ClosureCapture } => "uniq ",
                 };
 
                 // When printing regions, add trailing space if necessary.
