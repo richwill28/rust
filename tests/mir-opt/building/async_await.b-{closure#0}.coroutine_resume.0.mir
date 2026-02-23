@@ -134,7 +134,7 @@ fn b::{closure#0}(_1: Pin<&mut {async fn body of b()}>, _2: &mut Context<'_>) ->
         StorageLive(_11);
         StorageLive(_12);
         _12 = &mut (((*_39) as variant#3).0: {async fn body of a()});
-        _11 = &mut (*_12);
+        _11 = &two-phase (*_12);
         _10 = Pin::<&mut {async fn body of a()}>::new_unchecked(move _11) -> [return: bb5, unwind unreachable];
     }
 
@@ -149,7 +149,7 @@ fn b::{closure#0}(_1: Pin<&mut {async fn body of b()}>, _2: &mut Context<'_>) ->
     }
 
     bb6: {
-        _13 = &mut (*_14);
+        _13 = &two-phase (*_14);
         StorageDead(_15);
         _9 = <{async fn body of a()} as Future>::poll(move _10, move _13) -> [return: bb7, unwind unreachable];
     }
@@ -236,7 +236,7 @@ fn b::{closure#0}(_1: Pin<&mut {async fn body of b()}>, _2: &mut Context<'_>) ->
         StorageLive(_27);
         StorageLive(_28);
         _28 = &mut (((*_39) as variant#4).0: {async fn body of a()});
-        _27 = &mut (*_28);
+        _27 = &two-phase (*_28);
         _26 = Pin::<&mut {async fn body of a()}>::new_unchecked(move _27) -> [return: bb17, unwind unreachable];
     }
 
@@ -251,7 +251,7 @@ fn b::{closure#0}(_1: Pin<&mut {async fn body of b()}>, _2: &mut Context<'_>) ->
     }
 
     bb18: {
-        _29 = &mut (*_30);
+        _29 = &two-phase (*_30);
         StorageDead(_31);
         _25 = <{async fn body of a()} as Future>::poll(move _26, move _29) -> [return: bb19, unwind unreachable];
     }

@@ -71,7 +71,7 @@
           StorageLive(_12);
           StorageLive(_13);
           _13 = &mut _8;
-          _12 = &mut (*_13);
+          _12 = &two-phase (*_13);
           _11 = <std::ops::Range<usize> as Iterator>::next(move _12) -> [return: bb4, unwind unreachable];
       }
   

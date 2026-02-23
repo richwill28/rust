@@ -47,7 +47,7 @@
           StorageLive(_8);
           StorageLive(_9);
           _9 = &mut _4;
-          _8 = &mut (*_9);
+          _8 = &two-phase (*_9);
           _7 = <std::slice::Iter<'_, i32> as Iterator>::next(move _8) -> [return: bb3, unwind: bb8];
       }
   

@@ -67,7 +67,7 @@ fn main() -> () {
         StorageLive(_6);
         StorageLive(_7);
         _7 = &mut _1;
-        _6 = &mut (*_7);
+        _6 = &two-phase (*_7);
         _3 = Test::foo(move _4, move _6) -> [return: bb1, unwind: bb8];
     }
 
