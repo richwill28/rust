@@ -488,7 +488,14 @@ impl<'tcx> ThirBuildCx<'tcx> {
             }
 
             hir::ExprKind::AddrOf(hir::BorrowKind::Ref, mutbl, arg) => {
-                ExprKind::Borrow { borrow_kind: mutbl.to_borrow_kind(), arg: self.mirror_expr(arg), view: None }
+                // Extract view from the expression's type to avoid creating borrows that are too wide.
+                // When the type checker assigns type `&{view} T` to this borrow expression,
+                // we extract the view and use it directly.
+                let view = match expr_ty.kind() {
+                    ty::Ref(_, _, _, Some(ty_view)) => Some(self.tcx.ty_view_to_mir_view(*ty_view)),
+                    _ => None,
+                };
+                ExprKind::Borrow { borrow_kind: mutbl.to_borrow_kind(), arg: self.mirror_expr(arg), view }
             }
 
             hir::ExprKind::AddrOf(hir::BorrowKind::Raw, mutability, arg) => {

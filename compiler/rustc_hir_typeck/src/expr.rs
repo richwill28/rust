@@ -697,6 +697,25 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         //    access checking to enforce the view restriction.
         // 4. **View subtyping/coercion**: Should `&{x, y} T` be usable where `&{x} T` is
         //    expected? This would be analogous to how `&mut T` can coerce to `&T`.
+
+        // Extract view from expected type to avoid creating borrows that are too wide.
+        // When the expected type is `&{view} T`, we directly create `&{view} x` instead of
+        // creating `&x` (which borrows all fields) and then coercing to `&{view} *(&x)`.
+        let expected_view = expected.only_has_type(self).and_then(|ty| {
+            match self.try_structurally_resolve_type(expr.span, ty).kind() {
+                ty::Ref(_, _, expected_mutbl, view) => {
+                    // Only use the view if mutability is compatible.
+                    // We're permissive here since coercion can still narrow &mut to &.
+                    if mutbl >= *expected_mutbl {
+                        *view
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        });
+
         let hint = expected.only_has_type(self).map_or(NoExpectation, |ty| {
             match self.try_structurally_resolve_type(expr.span, ty).kind() {
                 ty::Ref(_, ty, _, _) | ty::RawPtr(ty, _) => {
@@ -747,7 +766,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // as it needs to live.
                 let region = self.next_region_var(RegionVariableOrigin::BorrowRegion(expr.span));
                 match kind {
-                    hir::BorrowKind::Ref => Ty::new_ref(self.tcx, region, ty, mutbl, None),
+                    // Use the expected view directly to avoid creating borrows that are too wide.
+                    // This makes `&x` typed as `&{view} x` when a view type is expected,
+                    // avoiding the need to first create `&x` then narrow via reborrow.
+                    hir::BorrowKind::Ref => Ty::new_ref(self.tcx, region, ty, mutbl, expected_view),
                     hir::BorrowKind::Pin => Ty::new_pinned_ref(self.tcx, region, ty, mutbl),
                     _ => unreachable!(),
                 }
