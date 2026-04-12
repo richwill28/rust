@@ -122,6 +122,14 @@ fn mir_borrowck(
     let (input_body, _) = tcx.mir_promoted(def);
     debug!("run query mir_borrowck: {}", tcx.def_path_str(def));
 
+    // When -Zaeneas is set, skip rustc's borrow checker entirely.
+    // Aeneas will perform its own borrow checking on the LLBC.
+    if tcx.sess.opts.unstable_opts.aeneas {
+        debug!("Skipping borrowck because -Zaeneas is set");
+        let opaque_types = Default::default();
+        return Ok(tcx.arena.alloc(opaque_types));
+    }
+
     let input_body: &Body<'_> = &input_body.borrow();
     if let Some(guar) = input_body.tainted_by_errors {
         debug!("Skipping borrowck because of tainted body");
