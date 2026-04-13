@@ -16,7 +16,7 @@ mod output_capture;
 mod panic_hook;
 mod raise_fd_limit;
 mod read2;
-mod runtest;
+pub(crate) mod runtest;
 pub mod rustdoc_gui_test;
 mod util;
 
@@ -565,6 +565,14 @@ fn run_tests(config: Arc<Config>) {
     // created during test discovery. When the executor decides to run a test,
     // it will return control to the rest of compiletest by calling `runtest::run`.
     let ok = executor::run_tests(&config, tests);
+
+    // Print aeneas verdict summary if running in --compare-mode=aeneas.
+    if matches!(config.compare_mode, Some(common::CompareMode::Aeneas)) {
+        runtest::ui::print_aeneas_summary();
+    }
+    if matches!(config.compare_mode, Some(common::CompareMode::AeneasVsPolonius)) {
+        runtest::ui::print_aeneas_vs_polonius_summary();
+    }
 
     // Check the outcome reported by the executor.
     if !ok {

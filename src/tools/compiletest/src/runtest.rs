@@ -42,7 +42,7 @@ mod pretty;
 mod run_make;
 mod rustdoc;
 mod rustdoc_json;
-mod ui;
+pub(crate) mod ui;
 // tidy-alphabetical-end
 
 mod compute_diff;
@@ -1816,6 +1816,13 @@ impl<'test> TestCx<'test> {
         }
 
         match self.config.compare_mode {
+            Some(CompareMode::Aeneas) => {
+                rustc.args(&["-Zaeneas"]);
+            }
+            Some(CompareMode::AeneasVsPolonius) => {
+                // No flags injected here. run_ui_test_aeneas_vs_polonius()
+                // compiles twice, adding -Zpolonius=next and -Zaeneas separately.
+            }
             Some(CompareMode::Polonius) => {
                 rustc.args(&["-Zpolonius=next"]);
             }
@@ -2737,7 +2744,10 @@ impl<'test> TestCx<'test> {
             expected_output_path(&self.testpaths, self.revision, &self.config.compare_mode, kind);
 
         if !path.exists() {
-            if let Some(CompareMode::Polonius) = self.config.compare_mode {
+            if let Some(
+                CompareMode::Polonius | CompareMode::Aeneas | CompareMode::AeneasVsPolonius,
+            ) = self.config.compare_mode
+            {
                 path = expected_output_path(&self.testpaths, self.revision, &None, kind);
             }
         }

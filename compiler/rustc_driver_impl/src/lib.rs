@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{env, str};
 
 use rustc_ast as ast;
@@ -431,7 +431,7 @@ fn dump_feature_usage_metrics(tcxt: TyCtxt<'_>, metrics_dir: &Path) {
 ///       need to move earlier or use `override_queries` to preserve MIR.
 fn run_aeneas_pipeline(sess: &Session) {
     let Some(input_path) = sess.io.input.opt_path() else {
-        sess.dcx().warn("cannot run Aeneas pipeline on string input; skipping");
+        sess.dcx().warn("cannot run aeneas on string input");
         return;
     };
 
@@ -487,13 +487,13 @@ fn run_aeneas_pipeline(sess: &Session) {
         Ok(s) if s.success() => {}
         Ok(s) => {
             sess.dcx().warn(format!(
-                "Charon exited with status {s}; Aeneas pipeline aborted"
+                "charon exited with status {s}"
             ));
             return;
         }
         Err(e) => {
             sess.dcx().warn(format!(
-                "failed to run Charon at `{}`: {e}",
+                "failed to run charon at `{}`: {e}",
                 charon_bin.display()
             ));
             return;
@@ -510,12 +510,54 @@ fn run_aeneas_pipeline(sess: &Session) {
     // Run Aeneas in borrow-check-only mode (no code generation).
     // It reads the LLBC file produced by Charon and verifies ownership
     // and borrowing invariants.
-    let aeneas_status = Command::new(&aeneas_bin)
+    //
+    // A timeout (AENEAS_TIMEOUT env var, default 60s) guards against hangs.
+    let timeout_secs: u64 = env::var("AENEAS_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    let timeout = Duration::from_secs(timeout_secs);
+
+    let mut child = match Command::new(&aeneas_bin)
         .arg("-borrow-check")
         .arg(&llbc_file)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .status();
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            sess.dcx().warn(format!(
+                "failed to run aeneas at `{}`: {e}",
+                aeneas_bin.display()
+            ));
+            return;
+        }
+    };
+
+    let start = Instant::now();
+    let aeneas_status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break Err(format!(
+                        "aeneas timed out after {timeout_secs}s \
+                         (set AENEAS_TIMEOUT)"
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                break Err(format!(
+                    "failed to wait on aeneas at `{}`: {e}",
+                    aeneas_bin.display()
+                ));
+            }
+        }
+    };
 
     // Report the outcome of the borrow check.
     match aeneas_status {
@@ -527,11 +569,8 @@ fn run_aeneas_pipeline(sess: &Session) {
                 "aeneas borrow check failed (exit status {s})"
             ));
         }
-        Err(e) => {
-            sess.dcx().warn(format!(
-                "failed to run aeneas at `{}`: {e}",
-                aeneas_bin.display()
-            ));
+        Err(msg) => {
+            sess.dcx().warn(msg);
         }
     }
 }

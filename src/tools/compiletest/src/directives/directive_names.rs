@@ -58,6 +58,8 @@ pub(crate) const KNOWN_DIRECTIVE_NAMES: &[&str] = &[
     "ignore-backends",
     "ignore-beta",
     "ignore-cdb",
+    "ignore-compare-mode-aeneas",
+    "ignore-compare-mode-aeneas-vs-polonius",
     "ignore-compare-mode-next-solver",
     "ignore-compare-mode-polonius",
     "ignore-coverage-map",

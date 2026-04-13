@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rustfix::{Filter, apply_suggestions, get_suggestions_from_json};
 use tracing::debug;
@@ -9,11 +10,79 @@ use super::{
     AllowUnused, Emit, FailMode, LinkToAux, PassMode, RunFailMode, RunResult, TargetLocation,
     TestCx, TestOutput, Truncated, UI_FIXED, WillExecute,
 };
+use crate::common::CompareMode;
 use crate::json;
 use crate::runtest::ProcRes;
 
+// Counters for aeneas verdict classifications (--compare-mode=aeneas).
+static AENEAS_BOTH_PASS: AtomicUsize = AtomicUsize::new(0);
+static AENEAS_RUSTC_PASS: AtomicUsize = AtomicUsize::new(0);
+static AENEAS_AENEAS_PASS: AtomicUsize = AtomicUsize::new(0);
+static AENEAS_BOTH_FAIL: AtomicUsize = AtomicUsize::new(0);
+static AENEAS_TIMEOUT: AtomicUsize = AtomicUsize::new(0);
+static AENEAS_NO_VERDICT: AtomicUsize = AtomicUsize::new(0);
+
+// Counters for aeneas-vs-polonius verdict classifications (--compare-mode=aeneas-vs-polonius).
+static AVP_BOTH_PASS: AtomicUsize = AtomicUsize::new(0);
+static AVP_POLONIUS_PASS: AtomicUsize = AtomicUsize::new(0);
+static AVP_AENEAS_PASS: AtomicUsize = AtomicUsize::new(0);
+static AVP_BOTH_FAIL: AtomicUsize = AtomicUsize::new(0);
+static AVP_TIMEOUT: AtomicUsize = AtomicUsize::new(0);
+static AVP_NO_VERDICT: AtomicUsize = AtomicUsize::new(0);
+
+/// Print a summary of aeneas verdict classifications to stderr.
+/// Called after all tests complete. Does nothing if no tests were classified.
+pub fn print_aeneas_summary() {
+    let bp = AENEAS_BOTH_PASS.load(Ordering::Relaxed);
+    let rp = AENEAS_RUSTC_PASS.load(Ordering::Relaxed);
+    let ap = AENEAS_AENEAS_PASS.load(Ordering::Relaxed);
+    let bf = AENEAS_BOTH_FAIL.load(Ordering::Relaxed);
+    let to = AENEAS_TIMEOUT.load(Ordering::Relaxed);
+    let nv = AENEAS_NO_VERDICT.load(Ordering::Relaxed);
+    let total = bp + rp + ap + bf + to + nv;
+    println!("aeneas summary: {total} tests");
+    println!("  [BOTH_PASS]   {bp}");
+    println!("  [RUSTC_PASS]  {rp}");
+    println!("  [AENEAS_PASS] {ap}");
+    println!("  [BOTH_FAIL]   {bf}");
+    println!("  [TIMEOUT]     {to}");
+    println!("  [NO_VERDICT]  {nv}");
+    println!();
+}
+
+/// Print a summary of aeneas-v-polonius verdict classifications.
+/// Called after all tests complete. Does nothing if no tests were classified.
+pub fn print_aeneas_vs_polonius_summary() {
+    let bp = AVP_BOTH_PASS.load(Ordering::Relaxed);
+    let pp = AVP_POLONIUS_PASS.load(Ordering::Relaxed);
+    let ap = AVP_AENEAS_PASS.load(Ordering::Relaxed);
+    let bf = AVP_BOTH_FAIL.load(Ordering::Relaxed);
+    let to = AVP_TIMEOUT.load(Ordering::Relaxed);
+    let nv = AVP_NO_VERDICT.load(Ordering::Relaxed);
+    let total = bp + pp + ap + bf + to + nv;
+    println!("aeneas-vs-polonius summary: {total} tests");
+    println!("  [BOTH_PASS]     {bp}");
+    println!("  [POLONIUS_PASS] {pp}");
+    println!("  [AENEAS_PASS]   {ap}");
+    println!("  [BOTH_FAIL]     {bf}");
+    println!("  [TIMEOUT]       {to}");
+    println!("  [NO_VERDICT]    {nv}");
+    println!();
+}
+
 impl TestCx<'_> {
     pub(super) fn run_ui_test(&self) {
+        // When --compare-mode=aeneas is active, use verdict-based classification
+        // that compares the expected rustc outcome with the actual Aeneas verdict,
+        // instead of the normal stderr/annotation comparison.
+        if matches!(self.config.compare_mode, Some(CompareMode::Aeneas)) {
+            self.run_ui_test_aeneas();
+            return;
+        }
+        if matches!(self.config.compare_mode, Some(CompareMode::AeneasVsPolonius)) {
+            self.run_ui_test_aeneas_vs_polonius();
+            return;
+        }
         if let Some(FailMode::Build) = self.props.fail_mode {
             // Make sure a build-fail test cannot fail due to failing analysis (e.g. typeck).
             let pm = Some(PassMode::Check);
@@ -263,6 +332,233 @@ impl TestCx<'_> {
             {
                 self.fatal_proc_rec("fixed code is still producing diagnostics", &res);
             }
+        }
+    }
+
+    /// Run a UI test under `--compare-mode=aeneas`.
+    ///
+    /// Triggered when `--compare-mode=aeneas` is passed to compiletest
+    /// (via `./x test --compare-mode=aeneas`). Instead of the normal
+    /// stderr/annotation comparison, this method classifies the result by
+    /// comparing the **expected rustc outcome** (from test directives like
+    /// `check-pass`) with the **actual Aeneas verdict** (parsed from the
+    /// compiler's stderr output).
+    ///
+    /// Classification:
+    ///   BOTH_PASS    - rustc and Aeneas both accept
+    ///   RUSTC_PASS   - rustc accepts but Aeneas rejects (**critical**)
+    ///   AENEAS_PASS  - rustc rejects but Aeneas accepts (**critical**)
+    ///   BOTH_FAIL    - both reject (different errors are expected)
+    ///   TIMEOUT      - Aeneas was killed after AENEAS_TIMEOUT
+    ///   NO_VERDICT   - Aeneas didn't produce a verdict
+    fn run_ui_test_aeneas(&self) {
+        let pm = self.pass_mode();
+        let emit_metadata = self.should_emit_metadata(pm);
+
+        // Compile the test. -Zaeneas is injected by compare-mode flag handling
+        // in make_compile_args().
+        // Don't execute the binary. We only care about the borrow check verdict.
+        let proc_res = self.compile_test(WillExecute::No, emit_metadata);
+
+        // What does normal rustc (without -Zaeneas) expect for this test?
+        // `true` for check-pass/build-pass/run-pass, `false` for check-fail (default).
+        let rustc_expects_pass = self.should_compile_successfully(pm);
+
+        // Parse the Aeneas verdict from stderr.
+        // The -Zaeneas pipeline emits these diagnostics:
+        //   "aeneas borrow check succeeded" - Aeneas accepts
+        //   "aeneas borrow check failed"    - Aeneas rejects
+        //   "aeneas timed out"              - Aeneas killed after AENEAS_TIMEOUT
+        //   "charon exited with status"     - Charon failed (counts as reject)
+        let aeneas_verdict = if proc_res.stderr.contains("aeneas borrow check succeeded") {
+            Some(true)
+        } else if proc_res.stderr.contains("aeneas timed out") {
+            // Aeneas was killed after AENEAS_TIMEOUT. Report separately
+            // so the user can distinguish hangs from genuine rejections.
+            let timeout_val: u64 = std::env::var("AENEAS_TIMEOUT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60);
+            AENEAS_TIMEOUT.fetch_add(1, Ordering::Relaxed);
+            self.fatal_proc_rec(
+                &format!(
+                    "aeneas: [TIMEOUT] aeneas timed out after {timeout_val}s, \
+                     set AENEAS_TIMEOUT to increase ({})",
+                    self.testpaths.file,
+                ),
+                &proc_res,
+            );
+        } else if proc_res.stderr.contains("aeneas borrow check failed")
+            || proc_res.stderr.contains("charon exited with status")
+        {
+            Some(false)
+        } else {
+            // No verdict. This happens when:
+            // - CHARON_BIN or AENEAS_BIN env vars are not set.
+            // - Compilation failed before reaching the after_analysis hook
+            //   (e.g. type errors, name resolution errors).
+            // - Etc.
+            None
+        };
+
+        let aeneas_accepts = match aeneas_verdict {
+            Some(v) => v,
+            // Compilation failed (non-borrowck errors) so the pipeline never
+            // reached Aeneas. Treat as "both reject" since the code is invalid
+            // regardless of which borrow checker is used.
+            None if !proc_res.status.success() => false,
+            // Compilation succeeded but no Aeneas verdict.
+            None => {
+                AENEAS_NO_VERDICT.fetch_add(1, Ordering::Relaxed);
+                self.fatal_proc_rec(
+                    "aeneas: [NO_VERDICT] no borrow check verdict, \
+                     are CHARON_BIN and AENEAS_BIN set?",
+                    &proc_res,
+                );
+            }
+        };
+
+        // Classify the result.
+        let (label, desc) = match (rustc_expects_pass, aeneas_accepts) {
+            (true, true) => ("BOTH_PASS", "rustc and aeneas both accept this code"),
+            (true, false) => ("RUSTC_PASS", "rustc accepts this code but aeneas rejects it"),
+            (false, true) => ("AENEAS_PASS", "rustc rejects this code but aeneas accepts it"),
+            (false, false) => ("BOTH_FAIL", "rustc and aeneas both reject this code"),
+        };
+        let critical = matches!(label, "RUSTC_PASS" | "AENEAS_PASS");
+
+        // Increment the appropriate counter.
+        match label {
+            "BOTH_PASS" => AENEAS_BOTH_PASS.fetch_add(1, Ordering::Relaxed),
+            "RUSTC_PASS" => AENEAS_RUSTC_PASS.fetch_add(1, Ordering::Relaxed),
+            "AENEAS_PASS" => AENEAS_AENEAS_PASS.fetch_add(1, Ordering::Relaxed),
+            "BOTH_FAIL" => AENEAS_BOTH_FAIL.fetch_add(1, Ordering::Relaxed),
+            _ => unreachable!(),
+        };
+
+        writeln!(
+            self.stdout,
+            "\naeneas: [{label}] {desc} ({})",
+            self.testpaths.file,
+        );
+
+        if critical {
+            self.fatal_proc_rec(
+                &format!("aeneas verdict mismatch: {desc}"),
+                &proc_res,
+            );
+        }
+    }
+
+    /// Run a UI test under `--compare-mode=aeneas-vs-polonius`.
+    ///
+    /// Compiles the test **twice**: once with `-Zpolonius=next` to get the
+    /// Polonius verdict (from compilation success/failure), then with
+    /// `-Zaeneas` to get the Aeneas verdict (from stderr messages).
+    /// Classifies the result by comparing the two verdicts.
+    ///
+    /// Classification:
+    ///   BOTH_PASS     - Polonius and Aeneas both accept
+    ///   POLONIUS_PASS - Polonius accepts but Aeneas rejects (**critical**)
+    ///   AENEAS_PASS   - Aeneas accepts but Polonius rejects (**critical**)
+    ///   BOTH_FAIL     - both reject
+    ///   TIMEOUT       - Aeneas was killed after AENEAS_TIMEOUT
+    ///   NO_VERDICT    - Aeneas didn't produce a verdict
+    fn run_ui_test_aeneas_vs_polonius(&self) {
+        let pm = self.pass_mode();
+        let emit_metadata = self.should_emit_metadata(pm);
+
+        // Run with Polonius.
+        let mut polonius_cmd = self.make_compile_args(
+            &self.testpaths.file,
+            TargetLocation::ThisDirectory(self.output_base_dir()),
+            emit_metadata,
+            AllowUnused::Yes,
+            LinkToAux::Yes,
+            Vec::new(),
+        );
+        polonius_cmd.args(&["-Zpolonius=next"]);
+        let polonius_res = self.compose_and_run_compiler(polonius_cmd, None);
+        let polonius_accepts = polonius_res.status.success();
+
+        // Run with Aeneas.
+        let mut aeneas_cmd = self.make_compile_args(
+            &self.testpaths.file,
+            TargetLocation::ThisDirectory(self.output_base_dir()),
+            emit_metadata,
+            AllowUnused::Yes,
+            LinkToAux::Yes,
+            Vec::new(),
+        );
+        aeneas_cmd.args(&["-Zaeneas"]);
+        let aeneas_res = self.compose_and_run_compiler(aeneas_cmd, None);
+
+        // Parse the Aeneas verdict from stderr (same logic as run_ui_test_aeneas).
+        let aeneas_verdict = if aeneas_res.stderr.contains("aeneas borrow check succeeded") {
+            Some(true)
+        } else if aeneas_res.stderr.contains("aeneas timed out") {
+            let timeout_val: u64 = std::env::var("AENEAS_TIMEOUT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60);
+            AVP_TIMEOUT.fetch_add(1, Ordering::Relaxed);
+            self.fatal_proc_rec(
+                &format!(
+                    "aeneas-vs-polonius: [TIMEOUT] aeneas timed out after {timeout_val}s, \
+                     set AENEAS_TIMEOUT to increase ({})",
+                    self.testpaths.file,
+                ),
+                &aeneas_res,
+            );
+        } else if aeneas_res.stderr.contains("aeneas borrow check failed")
+            || aeneas_res.stderr.contains("charon exited with status")
+        {
+            Some(false)
+        } else {
+            None
+        };
+
+        let aeneas_accepts = match aeneas_verdict {
+            Some(v) => v,
+            None if !aeneas_res.status.success() => false,
+            None => {
+                AVP_NO_VERDICT.fetch_add(1, Ordering::Relaxed);
+                self.fatal_proc_rec(
+                    "aeneas-vs-polonius: [NO_VERDICT] no borrow check verdict, \
+                     are CHARON_BIN and AENEAS_BIN set?",
+                    &aeneas_res,
+                );
+            }
+        };
+
+        // Classify the result.
+        let (label, desc) = match (polonius_accepts, aeneas_accepts) {
+            (true, true) => ("BOTH_PASS", "polonius and aeneas both accept this code"),
+            (true, false) => ("POLONIUS_PASS", "polonius accepts this code but aeneas rejects it"),
+            (false, true) => ("AENEAS_PASS", "aeneas accepts this code but polonius rejects it"),
+            (false, false) => ("BOTH_FAIL", "polonius and aeneas both reject this code"),
+        };
+        let critical = matches!(label, "POLONIUS_PASS" | "AENEAS_PASS");
+
+        match label {
+            "BOTH_PASS" => AVP_BOTH_PASS.fetch_add(1, Ordering::Relaxed),
+            "POLONIUS_PASS" => AVP_POLONIUS_PASS.fetch_add(1, Ordering::Relaxed),
+            "AENEAS_PASS" => AVP_AENEAS_PASS.fetch_add(1, Ordering::Relaxed),
+            "BOTH_FAIL" => AVP_BOTH_FAIL.fetch_add(1, Ordering::Relaxed),
+            _ => unreachable!(),
+        };
+
+        writeln!(
+            self.stdout,
+            "\naeneas-vs-polonius: [{label}] {desc} ({})",
+            self.testpaths.file,
+        );
+
+        if critical {
+            self.fatal_proc_rec(
+                &format!("aeneas-vs-polonius verdict mismatch: {desc}"),
+                &aeneas_res,
+            );
         }
     }
 }
