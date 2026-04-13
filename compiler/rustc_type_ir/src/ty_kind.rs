@@ -350,7 +350,7 @@ impl<I: Interner> fmt::Debug for TyKind<I> {
             RawPtr(ty, mutbl) => write!(f, "*{} {:?}", mutbl.ptr_str(), ty),
             Ref(r, t, m, view) => {
                 write!(f, "&{:?} ", r)?;
-                write!(f, "{} ", m.prefix_str())?;
+                write!(f, "{}", m.prefix_str())?;
                 if let Some(v) = view {
                     write!(f, "{{")?;
                     for (i, field) in v.iter().enumerate() {
