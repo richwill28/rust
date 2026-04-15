@@ -56,9 +56,11 @@ use std::iter;
 use rustc_hir as hir;
 use rustc_middle::bug;
 use rustc_middle::mir::{
-    Body, BorrowKind, FakeBorrowKind, MutBorrowKind, Place, PlaceElem, PlaceRef, ProjectionElem,
+    self, Body, BorrowKind, FakeBorrowKind, MutBorrowKind, Place, PlaceElem, PlaceRef,
+    ProjectionElem,
 };
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_span::Symbol;
 use tracing::{debug, instrument};
 
 use crate::{AccessDepth, ArtificialField, Deep, Overlap, Shallow};
@@ -78,6 +80,12 @@ pub enum PlaceConflictBias {
 /// Helper function for checking if places conflict with a mutable borrow and deep access depth.
 /// This is used to check for places conflicting outside of the borrow checking code (such as in
 /// dataflow).
+///
+/// Note: this is part of the public consumer API (re-exported via `consumers.rs` for use by
+/// Clippy, Miri, and other external analysis tools). It is view-unaware and will report
+/// conflicts even for fields not covered by a view borrow.
+///
+/// TODO(view): Make external consumers view-aware.
 pub fn places_conflict<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
@@ -90,6 +98,29 @@ pub fn places_conflict<'tcx>(
         body,
         borrow_place,
         BorrowKind::Mut { kind: MutBorrowKind::TwoPhaseBorrow },
+        None,
+        access_place.as_ref(),
+        AccessDepth::Deep,
+        bias,
+    )
+}
+
+/// Like `places_conflict`, but accepts an optional view to restrict which fields of the
+/// borrow place are considered borrowed.
+pub(crate) fn places_conflict_with_view<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    borrow_place: Place<'tcx>,
+    borrow_view: Option<mir::View<'tcx>>,
+    access_place: Place<'tcx>,
+    bias: PlaceConflictBias,
+) -> bool {
+    borrow_conflicts_with_place(
+        tcx,
+        body,
+        borrow_place,
+        BorrowKind::Mut { kind: MutBorrowKind::TwoPhaseBorrow },
+        borrow_view,
         access_place.as_ref(),
         AccessDepth::Deep,
         bias,
@@ -100,12 +131,16 @@ pub fn places_conflict<'tcx>(
 /// access depth. The `bias` parameter is used to determine how the unknowable (comparing runtime
 /// array indices, for example) should be interpreted - this depends on what the caller wants in
 /// order to make the conservative choice and preserve soundness.
+///
+/// When `borrow_view` is `Some`, the borrow is restricted to only the fields named in the view.
+/// An access to a field not in the view does not conflict with this borrow.
 #[inline]
 pub(super) fn borrow_conflicts_with_place<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
     borrow_place: Place<'tcx>,
     borrow_kind: BorrowKind,
+    borrow_view: Option<mir::View<'tcx>>,
     access_place: PlaceRef<'tcx>,
     access: AccessDepth,
     bias: PlaceConflictBias,
@@ -121,10 +156,27 @@ pub(super) fn borrow_conflicts_with_place<'tcx>(
     // This Local/Local case is handled by the more general code below, but
     // it's so common that it's a speed win to check for it first.
     if borrow_place.projection.is_empty() && access_place.projection.is_empty() {
+        // Both refer to the same local with no projections. This is always a conflict,
+        // regardless of view, accessing the entire local conflicts with any borrow of it.
         return true;
     }
 
-    place_components_conflict(tcx, body, borrow_place, borrow_kind, access_place, access, bias)
+    let base_conflict = place_components_conflict(
+        tcx, body, borrow_place, borrow_kind, access_place, access, bias,
+    );
+
+    if !base_conflict {
+        return false;
+    }
+
+    // If we have a view, check whether the access actually touches a field covered by the view.
+    if let Some(view) = borrow_view {
+        return view_borrow_conflicts_with_access(
+            tcx, body, borrow_place, view, access_place,
+        );
+    }
+
+    true
 }
 
 #[instrument(level = "debug", skip(tcx, body))]
@@ -223,12 +275,10 @@ fn place_components_conflict<'tcx>(
                     debug!("borrow_conflicts_with_place: shallow access behind ptr");
                     return false;
                 }
-                // TODO: Implement view types in borrowck.
                 (ProjectionElem::Deref, ty::Ref(_, _, hir::Mutability::Not, _), _) => {
                     // Shouldn't be tracked
                     bug!("Tracking borrow behind shared reference.");
                 }
-                // TODO: Implement view types in borrowck.
                 (ProjectionElem::Deref, ty::Ref(_, _, hir::Mutability::Mut, _), AccessDepth::Drop) => {
                     // Values behind a mutable reference are not access either by dropping a
                     // value, or by StorageDead
@@ -525,4 +575,161 @@ fn place_projection_conflict<'tcx>(
             todo!()
         }
     }
+}
+
+/// Resolves a `FieldIdx` to its `Symbol` name given the type of the base place.
+/// Returns `None` if the type is not a struct or the field index is out of bounds.
+fn resolve_field_name<'tcx>(
+    _tcx: TyCtxt<'tcx>,
+    base_ty: Ty<'tcx>,
+    field_idx: rustc_abi::FieldIdx,
+) -> Option<Symbol> {
+    match base_ty.kind() {
+        ty::Adt(def, _) if def.is_struct() => {
+            let variant = def.non_enum_variant();
+            variant.fields.get(field_idx).map(|f| f.name)
+        }
+        // For tuples, closures, etc., view types don't apply
+        _ => None,
+    }
+}
+
+/// Determines whether an access place conflicts with a view-restricted borrow.
+///
+/// A view restricts a borrow to only cover specific fields. For example, a borrow of `s` with
+/// view `{mut a, b}` only covers `s.a` and `s.b`. An access to `s.c` does NOT conflict.
+///
+/// This function is called after `place_components_conflict` has already determined that the
+/// places would conflict without view information. The view can only *remove* a conflict: if
+/// the access targets a field not covered by the view, the borrow does not actually conflict.
+///
+/// If the access covers the borrow's base (or is the same place), it always conflicts, you
+/// can't move or overwrite `s` while any of its fields are borrowed. Otherwise, the access
+/// extends past the borrow place into specific fields, and we check whether the accessed field
+/// path overlaps any view field path using bidirectional prefix matching.
+///
+/// Examples:
+///
+/// ```rust,ignore
+/// struct Inner { x: i32, y: i32 }
+/// struct S { point: Inner, other: i32 }
+/// let mut s = S { point: Inner { x: 1, y: 2 }, other: 3 };
+/// let r = &{mut point.x} s;  // view borrows only s.point.x
+///
+/// s.point = ...;      // ERROR: [point] is a prefix of view path [point, x]
+/// s.point.x = 10;     // ERROR: [point, x] exactly matches view path [point, x]
+/// s.point.y = 20;     // OK: [point, y] does not match [point, x]
+/// s.other = 30;       // OK: [other] does not match [point, x]
+/// ```
+fn view_borrow_conflicts_with_access<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    borrow_place: Place<'tcx>,
+    view: mir::View<'tcx>,
+    access_place: PlaceRef<'tcx>,
+) -> bool {
+    let borrow_proj_len = borrow_place.projection.len();
+    let access_proj_len = access_place.projection.len();
+
+    // If the access place is shorter than or equal to the borrow place, the access covers
+    // the borrow's base (or is the same). This always conflicts, accessing `s` when we
+    // have a view borrow of `s.{a}` still conflicts because `s` includes `s.a`.
+    if access_proj_len <= borrow_proj_len {
+        debug!("view_borrow_conflicts: access is prefix/equal to borrow -> CONFLICT");
+        return true;
+    }
+
+    // The access place extends past the borrow place. Collect the field projections
+    // past the borrow place and check if they match any field path in the view.
+    //
+    // The borrow place projections have already been checked to match the access place
+    // projections in lockstep (by place_components_conflict). So we only need to look at
+    // the access projections starting from borrow_proj_len.
+    let access_suffix = &access_place.projection[borrow_proj_len..];
+
+    // Build the field path from the access suffix by resolving each Field projection.
+    let mut access_field_path: Vec<Symbol> = Vec::new();
+    let mut current_ty = if borrow_proj_len == 0 {
+        body.local_decls[borrow_place.local].ty
+    } else {
+        Place::ty_from(
+            borrow_place.local,
+            &borrow_place.projection[..borrow_proj_len],
+            body,
+            tcx,
+        )
+        .ty
+    };
+
+    for &proj_elem in access_suffix {
+        match proj_elem {
+            ProjectionElem::Field(idx, ty) => {
+                if let Some(name) = resolve_field_name(tcx, current_ty, idx) {
+                    access_field_path.push(name);
+                    current_ty = ty;
+                } else {
+                    // Can't resolve field name (tuple, closure, etc.), conservatively conflict.
+                    debug!("view_borrow_conflicts: can't resolve field name -> CONFLICT");
+                    return true;
+                }
+            }
+            ProjectionElem::Deref => {
+                // Going through a deref past the borrow place, the view doesn't restrict
+                // what's behind a pointer. Conservatively report conflict.
+                debug!("view_borrow_conflicts: deref past borrow place -> CONFLICT");
+                return true;
+            }
+            _ => {
+                // Index, ConstantIndex, Subslice, Downcast, etc., conservatively conflict.
+                debug!("view_borrow_conflicts: non-field projection -> CONFLICT");
+                return true;
+            }
+        }
+    }
+
+    if access_field_path.is_empty() {
+        // No field projections beyond the borrow place, shouldn't happen since we checked
+        // access_proj_len > borrow_proj_len, but be conservative.
+        debug!("view_borrow_conflicts: no field path extracted -> CONFLICT");
+        return true;
+    }
+
+    // Check if any view field's path is a prefix of (or equal to) the access field path,
+    // or if the access field path is a prefix of any view field's path.
+    //
+    // This mirrors the prefix-matching semantics: a view field `{point}` covers
+    // `point`, `point.x`, `point.x.y`, etc. And an access to `point` conflicts with
+    // a view field `{point.x}` because it covers the parent.
+    for view_field in view.iter() {
+        let view_path = view_field.path;
+
+        // Check if view_path is a prefix of access_field_path
+        if access_field_path.len() >= view_path.len()
+            && access_field_path[..view_path.len()] == *view_path
+        {
+            debug!(
+                "view_borrow_conflicts: view field {:?} is prefix of access {:?} -> CONFLICT",
+                view_path, access_field_path
+            );
+            return true;
+        }
+
+        // Check if access_field_path is a prefix of view_path
+        if view_path.len() >= access_field_path.len()
+            && view_path[..access_field_path.len()] == *access_field_path
+        {
+            debug!(
+                "view_borrow_conflicts: access {:?} is prefix of view field {:?} -> CONFLICT",
+                access_field_path, view_path
+            );
+            return true;
+        }
+    }
+
+    // No view field matches the access path, the access is to a field not covered by the view.
+    debug!(
+        "view_borrow_conflicts: access {:?} not in view -> NO CONFLICT",
+        access_field_path
+    );
+    false
 }

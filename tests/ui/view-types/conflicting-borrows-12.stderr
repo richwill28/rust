@@ -1,0 +1,20 @@
+error[E0502]: cannot borrow `p.1` as mutable because it is also borrowed as immutable
+  --> $DIR/conflicting-borrows-12.rs:12:40
+   |
+LL |     let _ = conflicting_borrows_12(&p, &mut p);
+   |             ---------------------- --  ^^^^^^ mutable borrow occurs here
+   |             |                      |
+   |             |                      immutable borrow occurs here
+   |             immutable borrow later used by call
+   |
+note: function `conflicting_borrows_12` has parameters with conflicting borrows
+  --> $DIR/conflicting-borrows-12.rs:5:44
+   |
+LL | fn conflicting_borrows_12(a: &{0, 1} Pair, b: &mut {0, mut 1} Pair) -> i32 {
+   |                           ---------------  ^^^^^^^^^^^^^^^^^^^^^^^ borrows path `1` mutably
+   |                           |
+   |                           borrows path `1` immutably
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0502`.

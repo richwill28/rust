@@ -506,7 +506,7 @@ impl<'tcx> MirBorrowckCtxt<'_, '_, 'tcx> {
                 //
                 //     &
                 //     - let's call the lifetime of this reference `'1`
-                // TODO: Implement view types in borrowck.
+                // View is not relevant.
                 (ty::Ref(region, referent_ty, _, _), hir::TyKind::Ref(_lifetime, referent_hir_ty, _)) => {
                     if region.as_var() == needle_fr {
                         // Just grab the first character, the `&`.

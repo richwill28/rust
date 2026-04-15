@@ -41,8 +41,7 @@ impl<'tcx> Place<'tcx> {
             if elem == ProjectionElem::Deref {
                 let ty = proj_base.ty(body, tcx).ty;
                 match ty.kind() {
-                    // TODO: Implement view types in borrowck.
-                    ty::Ref(_, _, hir::Mutability::Not, _view) if i == 0 => {
+                    ty::Ref(_, _, hir::Mutability::Not, _) if i == 0 => {
                         // For references to thread-local statics, we do need
                         // to track the borrow.
                         if body.local_decls[self.local].is_ref_to_thread_local() {
@@ -50,7 +49,6 @@ impl<'tcx> Place<'tcx> {
                         }
                         return true;
                     }
-                    // TODO: Implement view types in borrowck.
                     ty::RawPtr(..) | ty::Ref(_, _, hir::Mutability::Not, _) => {
                         // For both derefs of raw pointers and `&T`
                         // references, the original path is `Copy` and

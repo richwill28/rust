@@ -14,7 +14,7 @@ use rustc_mir_dataflow::impls::{
 use rustc_mir_dataflow::{Analysis, GenKill, JoinSemiLattice};
 use tracing::debug;
 
-use crate::{BorrowSet, PlaceConflictBias, PlaceExt, RegionInferenceContext, places_conflict};
+use crate::{BorrowSet, PlaceConflictBias, PlaceExt, RegionInferenceContext, places_conflict_with_view};
 
 // This analysis is different to most others. Its results aren't computed with
 // `iterate_to_fixpoint`, but are instead composed from the results of three sub-analyses that are
@@ -495,10 +495,11 @@ impl<'a, 'tcx> Borrows<'a, 'tcx> {
         // will be assured that two places being compared definitely denotes the same sets of
         // locations.
         let definitely_conflicting_borrows = other_borrows_of_local.filter(|&i| {
-            places_conflict(
+            places_conflict_with_view(
                 self.tcx,
                 self.body,
                 self.borrow_set[i].borrowed_place,
+                self.borrow_set[i].view,
                 place,
                 PlaceConflictBias::NoOverlap,
             )
@@ -549,7 +550,15 @@ impl<'tcx> rustc_mir_dataflow::Analysis<'tcx> for Borrows<'_, 'tcx> {
     ) {
         match &stmt.kind {
             mir::StatementKind::Assign(box (lhs, rhs)) => {
-                // TODO: Implement view types in borrowck.
+                // The `_view` is intentionally unused here.
+                // Borrow generation marks the entire borrow as in-scope
+                // (via its BorrowIndex); the view metadata is already
+                // stored on the BorrowData in the borrow set. View-aware
+                // narrowing happens downstream:
+                // - `kill_borrows_on_place` uses `places_conflict_with_view`
+                //   to decide which borrows are killed on assignment,
+                // - conflict detection in `places_conflict.rs` consults
+                //   the view to filter out non-overlapping field accesses.
                 if let mir::Rvalue::Ref(_, _, place, _view) = rhs {
                     if place.ignore_borrow(
                         self.tcx,

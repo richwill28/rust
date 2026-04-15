@@ -496,7 +496,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                             "mutable pointers are invariant over their type parameter".to_string(),
                         )
                     }
-                    // TODO: Implement view types in borrowck.
+                    // View is not relevant.
                     ty::Ref(_, inner_ty, mutbl, _view) => {
                         assert_eq!(*mutbl, hir::Mutability::Mut);
                         (
@@ -1067,7 +1067,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         let liberated_sig = tcx.liberate_late_bound_regions(closure_def_id.to_def_id(), args.sig());
         let mut peeled_ty = liberated_sig.output();
         let mut count = 0;
-        // TODO: Implement view types in borrowck.
+        // View is not relevant.
         while let ty::Ref(_, ref_ty, _, _view) = *peeled_ty.kind() {
             peeled_ty = ref_ty;
             count += 1;

@@ -10,7 +10,7 @@ use rustc_errors::{Applicability, Diag};
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::{self as hir, BindingMode, ByRef, Node};
 use rustc_middle::bug;
-use rustc_middle::hir::place::PlaceBase;
+use rustc_middle::hir::place::{PlaceBase, ProjectionKind};
 use rustc_middle::mir::visit::PlaceContext;
 use rustc_middle::mir::{
     self, BindingForm, Body, BorrowKind, Local, LocalDecl, LocalInfo, LocalKind, Location,
@@ -102,11 +102,59 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                     Place::ty_from(local, proj_base, self.body, self.infcx.tcx).ty
                 ));
 
-                let imm_borrow_derefed = self.upvars[upvar_index.index()]
-                    .place
-                    .deref_tys()
-                    // TODO: Implement view types in borrowck.
-                    .any(|ty| matches!(ty.kind(), ty::Ref(.., hir::Mutability::Not, _)));
+                let imm_borrow_derefed = {
+                    let captured_place = &self.upvars[upvar_index.index()].place;
+                    let projections = &captured_place.projections;
+                    let mut found = false;
+                    for (index, proj) in projections.iter().enumerate() {
+                        if proj.kind != ProjectionKind::Deref {
+                            continue;
+                        }
+                        let ty_before =
+                            captured_place.ty_before_projection(index);
+                        match ty_before.kind() {
+                            // A plain shared reference is always immutable.
+                            ty::Ref(.., hir::Mutability::Not, _) => {
+                                found = true;
+                                break;
+                            }
+                            // A `&mut {mut a, b} S` makes `b` effectively
+                            // immutable. Build the full field path from the
+                            // deref through subsequent field projections and
+                            // check if a shared view field covers it.
+                            ty::Ref(_, _, hir::Mutability::Mut, Some(view)) => {
+                                let deref_ty = proj.ty;
+                                let mut access_path: Vec<Symbol> = Vec::new();
+                                let mut cur_ty = deref_ty;
+                                for next_proj in &projections[index + 1..] {
+                                    if let ProjectionKind::Field(field_idx, _) = next_proj.kind
+                                        && let Some(adt_def) = cur_ty.ty_adt_def()
+                                        && let Some(f) =
+                                            adt_def.non_enum_variant().fields.get(field_idx)
+                                    {
+                                        access_path.push(f.name);
+                                        cur_ty = next_proj.ty;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                if !access_path.is_empty() {
+                                    let is_shared_in_view = view.iter().any(|vf| {
+                                        access_path.len() >= vf.path.len()
+                                            && access_path[..vf.path.len()] == *vf.path
+                                            && vf.mutbl == hir::Mutability::Not
+                                    });
+                                    if is_shared_in_view {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    found
+                };
 
                 // If the place is immutable then:
                 //
@@ -325,7 +373,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                                 _,
                                 mir::BorrowKind::Mut { kind: mir::MutBorrowKind::Default },
                                 _,
-                                // TODO: Implement view types in borrowck.
+                                // View is not relevant for this diagnostic pattern.
                                 _view,
                             ),
                         )),
@@ -467,7 +515,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 }
 
                 let tcx = self.infcx.tcx;
-                // TODO: Implement view types in borrowck.
+                // View is not relevant for this diagnostic pattern.
                 if let ty::Ref(_, ty, Mutability::Mut, _view) = the_place_err.ty(self.body, tcx).ty.kind()
                     && let ty::Closure(id, _) = *ty.kind()
                 {
@@ -1541,7 +1589,6 @@ fn mut_borrow_of_mutable_ref(local_decl: &LocalDecl<'_>, local_name: Option<Symb
         LocalInfo::User(mir::BindingForm::Var(mir::VarBindingForm {
             binding_mode: BindingMode(ByRef::No, Mutability::Not),
             ..
-            // TODO: Implement view types in borrowck.
         })) => matches!(local_decl.ty.kind(), ty::Ref(_, _, hir::Mutability::Mut, _)),
         LocalInfo::User(mir::BindingForm::ImplicitSelf(kind)) => {
             // Check if the user variable is a `&mut self` and we can therefore
@@ -1555,7 +1602,6 @@ fn mut_borrow_of_mutable_ref(local_decl: &LocalDecl<'_>, local_name: Option<Symb
             // Otherwise, check if the name is the `self` keyword - in which case
             // we have an explicit self. Do the same thing in this case and check
             // for a `self: &mut Self` to suggest removing the `&mut`.
-            // TODO: Implement view types in borrowck.
             matches!(local_decl.ty.kind(), ty::Ref(_, _, hir::Mutability::Mut, _))
         }
         _ => false,
@@ -1631,7 +1677,7 @@ fn suggest_ampmut<'tcx>(
         // Take some special care when handling `let _x = &*_y`:
         // We want to know if this is part of an overloaded index, so `let x = &a[0]`,
         // or whether this is a usertype ascription (`let _x: &T = y`).
-        // TODO: Implement view types in borrowck.
+        // View is not relevant for this diagnostic pattern.
         if let Rvalue::Ref(_, BorrowKind::Shared, place, _) = rvalue
             && place.projection.len() == 1
             && place.projection[0] == ProjectionElem::Deref
@@ -1688,7 +1734,7 @@ fn suggest_ampmut<'tcx>(
         }
 
         let sugg = match rvalue {
-            // TODO: Implement view types in borrowck.
+            // View is not relevant for this diagnostic pattern.
             Rvalue::Ref(_, BorrowKind::Shared, _, _) if let Some(ref_idx) = rhs_str.find('&') => {
                 // Shrink the span to just after the `&` in `&variable`.
                 Some((
@@ -1735,7 +1781,7 @@ fn get_mut_span_in_struct_field<'tcx>(
     field: FieldIdx,
 ) -> Option<Span> {
     // Expect our local to be a reference to a struct of some kind.
-    // TODO: Implement view types in borrowck.
+    // View is not relevant for this diagnostic pattern.
     if let ty::Ref(_, ty, _, _view) = ty.kind()
         && let ty::Adt(def, _) = ty.kind()
         && let field = def.all_fields().nth(field.index())?
