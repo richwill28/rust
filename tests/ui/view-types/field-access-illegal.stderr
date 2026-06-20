@@ -1,0 +1,32 @@
+error: field `y` is not accessible through this view
+  --> $DIR/field-access-illegal.rs:10:13
+   |
+LL | fn access_param_no_annotation(rx: &{x} Data) {
+   |                               ------------- view defined here
+LL |     let _ = rx.y;
+   |             ^^^^ field access not allowed by view
+   |
+   = note: the view on type `Data` only allows access to specific field paths
+   = help: this view allows access to: x
+   = note: you can access these fields and any of their subfields
+
+error: field `y` is not accessible through this view
+  --> $DIR/field-access-illegal.rs:16:13
+   |
+LL |     let _ = r.y;
+   |             ^^^ field access not allowed by view
+   |
+   = help: this view allows access to: x
+   = note: you can access these fields and any of their subfields
+
+error: field `y` is not accessible through this view
+  --> $DIR/field-access-illegal.rs:22:13
+   |
+LL |     let _ = r.y;
+   |             ^^^ field access not allowed by view
+   |
+   = help: this view allows access to: x
+   = note: you can access these fields and any of their subfields
+
+error: aborting due to 3 previous errors
+

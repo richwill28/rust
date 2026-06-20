@@ -411,16 +411,57 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     };
 
                     // Look up the view constraint for this variable.
-                    let view_constraints = self.view_constraints.borrow();
-                    let Some(view_constraint) = view_constraints.get(&hir_id) else {
-                        return Ok(()); // No view constraint for this variable.
-                    };
+                    let opt_view_constraint = self.view_constraints.borrow().get(&hir_id).cloned();
+                    if let Some(ref view_constraint) = opt_view_constraint {
+                        return self.check_access_path_against_view(
+                            field_expr,
+                            &access_path,
+                            view_constraint,
+                        );
+                    }
 
-                    return self.check_access_path_against_view(
-                        field_expr,
-                        &access_path,
-                        view_constraint,
-                    );
+                    // No annotation-based view constraint found. Fall back to checking the
+                    // inferred type of the variable: a reborrowed view reference like
+                    // `let r = &*rx` where `rx: &{x} Data` carries its view in the type
+                    // `&{x} Data`, even though `r` has no explicit annotation.
+                    let node_ty = self.typeck_results.borrow().node_type(current_expr.hir_id);
+                    if let ty::Ref(_, _, _, Some(view)) = node_ty.kind() {
+                        let field_allowed = view.iter().any(|vf| {
+                            access_path.len() >= vf.path.len()
+                                && access_path[..vf.path.len()] == *vf.path
+                        });
+                        if !field_allowed {
+                            let access_str = access_path
+                                .iter()
+                                .map(|s| s.to_string())
+                                .collect::<Vec<_>>()
+                                .join(".");
+                            let available: Vec<String> = view
+                                .iter()
+                                .map(|vf| {
+                                    vf.path
+                                        .iter()
+                                        .map(|s| s.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(".")
+                                })
+                                .collect();
+                            let mut err = self.dcx().struct_span_err(
+                                field_expr.span,
+                                format!("field `{}` is not accessible through this view", access_str),
+                            );
+                            err.span_label(field_expr.span, "field access not allowed by view");
+                            if !available.is_empty() {
+                                err.help(format!(
+                                    "this view allows access to: {}",
+                                    available.join(", ")
+                                ));
+                                err.note("you can access these fields and any of their subfields");
+                            }
+                            return Err(err.emit());
+                        }
+                    }
+                    return Ok(());
                 }
                 _ => {
                     // Not a simple field access chain, no view constraint applies.
