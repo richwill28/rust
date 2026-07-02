@@ -674,15 +674,19 @@ fn view_borrow_conflicts_with_access<'tcx>(
                 }
             }
             ProjectionElem::Deref => {
-                // Going through a deref past the borrow place, the view doesn't restrict
-                // what's behind a pointer. Conservatively report conflict.
-                debug!("view_borrow_conflicts: deref past borrow place -> CONFLICT");
-                return true;
+                // A deref past the borrow place means the access goes through a pointer.
+                // We cannot track the view beyond a pointer level. However, if the field
+                // path collected so far already diverges from every view field, the access
+                // is through a non-view field and does not conflict, fall through to the
+                // matching logic below. If the partial path might still overlap a view
+                // field, be conservative and report conflict.
+                break;
             }
             _ => {
-                // Index, ConstantIndex, Subslice, Downcast, etc., conservatively conflict.
-                debug!("view_borrow_conflicts: non-field projection -> CONFLICT");
-                return true;
+                // Index, ConstantIndex, Subslice, Downcast, OpaqueCast, etc.
+                // We cannot continue symbolically, but if the field path built so far
+                // already diverges from every view field the access cannot conflict.
+                break;
             }
         }
     }

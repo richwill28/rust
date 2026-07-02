@@ -72,6 +72,22 @@ pub trait Delegate<'tcx> {
         bk: ty::BorrowKind,
     );
 
+    /// The value found at `place` is being borrowed with kind `bk` and a view restriction.
+    /// Only fields in `view` are considered borrowed.
+    /// The default implementation ignores the view and calls `borrow`.
+    fn borrow_with_view(
+        &mut self,
+        place_with_id: &PlaceWithHirId<'tcx>,
+        diag_expr_id: HirId,
+        bk: ty::BorrowKind,
+        view: ty::View<'tcx>,
+    ) {
+        // Default: ignore the view restriction and record a regular borrow.
+        // Override this to implement precise view-restricted capture.
+        let _ = view;
+        self.borrow(place_with_id, diag_expr_id, bk)
+    }
+
     /// The value found at `place` is being copied.
     /// `diag_expr_id` is the id used for diagnostics (see `consume` for more details).
     ///
@@ -122,6 +138,16 @@ impl<'tcx, D: Delegate<'tcx>> Delegate<'tcx> for &mut D {
         bk: ty::BorrowKind,
     ) {
         (**self).borrow(place_with_id, diag_expr_id, bk)
+    }
+
+    fn borrow_with_view(
+        &mut self,
+        place_with_id: &PlaceWithHirId<'tcx>,
+        diag_expr_id: HirId,
+        bk: ty::BorrowKind,
+        view: ty::View<'tcx>,
+    ) {
+        (**self).borrow_with_view(place_with_id, diag_expr_id, bk, view)
     }
 
     fn copy(&mut self, place_with_id: &PlaceWithHirId<'tcx>, diag_expr_id: HirId) {
@@ -386,6 +412,19 @@ impl<'tcx, Cx: TypeInformationCtxt<'tcx>, D: Delegate<'tcx>> ExprUseVisitor<'tcx
         self.walk_expr(expr)
     }
 
+    /// If `method_call_expr` is a method whose first parameter is a view-restricted reference
+    /// (e.g. `fn foo(&mut {x} Self)`), return the view. Otherwise return `None`.
+    fn get_method_self_view(
+        &self,
+        method_call_expr: &hir::Expr<'_>,
+    ) -> Option<ty::View<'tcx>> {
+        let typeck_results = self.cx.typeck_results();
+        let def_id = typeck_results.type_dependent_def_id(method_call_expr.hir_id)?;
+        let fn_sig = self.cx.tcx().fn_sig(def_id).instantiate_identity().skip_binder();
+        let self_ty = fn_sig.inputs().first()?;
+        if let ty::Ref(_, _, _, Some(view)) = self_ty.kind() { Some(*view) } else { None }
+    }
+
     #[instrument(skip(self), level = "debug")]
     pub fn walk_expr(&self, expr: &hir::Expr<'_>) -> Result<(), Cx::Error> {
         self.walk_adjustment(expr)?;
@@ -428,8 +467,65 @@ impl<'tcx, Cx: TypeInformationCtxt<'tcx>, D: Delegate<'tcx>> ExprUseVisitor<'tcx
             }
 
             hir::ExprKind::MethodCall(.., receiver, args, _) => {
-                // callee.m(args)
-                self.consume_expr(receiver)?;
+                // callee.m(args) — if method has a view-restricted self, record a view-aware capture.
+                if let Some(view) = self.get_method_self_view(expr) {
+                    let typeck_results = self.cx.typeck_results();
+                    let adjustments = typeck_results.expr_adjustments(receiver);
+                    // Walk all adjustments up to (but not including) the final Borrow,
+                    // to get the base place that is actually being borrowed.
+                    // For `self.method()` where `self: &mut T`, there's a Deref adjustment
+                    // before the Borrow, so we apply Deref to get `*self: T` before borrowing.
+                    let mut place = self.cat_expr_unadjusted(receiver)?;
+                    let mut view_borrow_recorded = false;
+                    'adj: for adjustment in adjustments {
+                        match adjustment.kind {
+                            adjustment::Adjust::Borrow(ref autoref) => {
+                                // If the base (after applying non-borrow adjustments) is
+                                // an upvar, record the view-restricted borrow on the deref'd place.
+                                if matches!(place.place.base, PlaceBase::Upvar(_)) {
+                                    let bk = match autoref {
+                                        adjustment::AutoBorrow::Ref(m, _) => match m {
+                                            adjustment::AutoBorrowMutability::Mut { .. } => {
+                                                ty::BorrowKind::Mutable
+                                            }
+                                            adjustment::AutoBorrowMutability::Not => {
+                                                ty::BorrowKind::Immutable
+                                            }
+                                        },
+                                        adjustment::AutoBorrow::RawPtr(_) => {
+                                            ty::BorrowKind::Mutable
+                                        }
+                                    };
+                                    self.delegate.borrow_mut().borrow_with_view(
+                                        &place,
+                                        place.hir_id,
+                                        bk,
+                                        view,
+                                    );
+                                    view_borrow_recorded = true;
+                                }
+                                break 'adj;
+                            }
+                            _ => {
+                                place = self.cat_expr_adjusted(receiver, place, adjustment)?;
+                            }
+                        }
+                    }
+                    if !view_borrow_recorded {
+                        // Fallback: could not find an upvar base — use normal consumption.
+                        self.consume_expr(receiver)?;
+                    } else {
+                        // View borrow was recorded. For simple path receivers (e.g. `self`),
+                        // no sub-expressions need walking. For complex receivers, fall back
+                        // to consuming them normally.
+                        match receiver.kind {
+                            hir::ExprKind::Path(_) => {}
+                            _ => self.consume_expr(receiver)?,
+                        }
+                    }
+                } else {
+                    self.consume_expr(receiver)?;
+                }
                 self.consume_exprs(args)?;
             }
 
@@ -1151,12 +1247,20 @@ impl<'tcx, Cx: TypeInformationCtxt<'tcx>, D: Delegate<'tcx>> ExprUseVisitor<'tcx
                         ty::UpvarCapture::ByUse => {
                             self.consume_clone_or_copy(&place_with_id, place_with_id.hir_id);
                         }
-                        ty::UpvarCapture::ByRef(upvar_borrow) => {
-                            self.delegate.borrow_mut().borrow(
-                                &place_with_id,
-                                place_with_id.hir_id,
-                                upvar_borrow,
-                            );
+                        ty::UpvarCapture::ByRef(upvar_borrow, view) => {
+                            match view {
+                                Some(v) => self.delegate.borrow_mut().borrow_with_view(
+                                    &place_with_id,
+                                    place_with_id.hir_id,
+                                    upvar_borrow,
+                                    v,
+                                ),
+                                None => self.delegate.borrow_mut().borrow(
+                                    &place_with_id,
+                                    place_with_id.hir_id,
+                                    upvar_borrow,
+                                ),
+                            }
                         }
                     }
                 }

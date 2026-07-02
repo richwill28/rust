@@ -917,6 +917,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                         match captured_place.info.capture_kind {
                             ty::UpvarCapture::ByRef(
                                 ty::BorrowKind::Mutable | ty::BorrowKind::UniqueImmutable,
+                                _,
                             ) => {
                                 capture_reason = format!("mutable borrow of `{upvar}`");
                             }

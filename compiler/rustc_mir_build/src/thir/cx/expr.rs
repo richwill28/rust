@@ -1450,7 +1450,7 @@ impl<'tcx> ThirBuildCx<'tcx> {
                     kind: ExprKind::ByUse { expr: expr_id, span },
                 }
             }
-            ty::UpvarCapture::ByRef(upvar_borrow) => {
+            ty::UpvarCapture::ByRef(upvar_borrow, upvar_view) => {
                 let borrow_kind = match upvar_borrow {
                     ty::BorrowKind::Immutable => BorrowKind::Shared,
                     ty::BorrowKind::UniqueImmutable => {
@@ -1460,6 +1460,7 @@ impl<'tcx> ThirBuildCx<'tcx> {
                         BorrowKind::Mut { kind: mir::MutBorrowKind::Default }
                     }
                 };
+                let mir_view = upvar_view.map(|v| self.tcx.ty_view_to_mir_view(v));
                 Expr {
                     temp_scope_id,
                     ty: upvar_ty,
@@ -1467,7 +1468,7 @@ impl<'tcx> ThirBuildCx<'tcx> {
                     kind: ExprKind::Borrow {
                         borrow_kind,
                         arg: self.thir.exprs.push(captured_place_expr),
-                        view: None,
+                        view: mir_view,
                     },
                 }
             }
