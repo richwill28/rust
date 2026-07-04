@@ -97,11 +97,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
             PlaceRef {
                 local,
                 projection: [proj_base @ .., ProjectionElem::Field(upvar_index, _)],
-            } => {
-                debug_assert!(is_closure_like(
-                    Place::ty_from(local, proj_base, self.body, self.infcx.tcx).ty
-                ));
-
+            } if is_closure_like(Place::ty_from(local, proj_base, self.body, self.infcx.tcx).ty) => {
                 let imm_borrow_derefed = {
                     let captured_place = &self.upvars[upvar_index.index()].place;
                     let projections = &captured_place.projections;
@@ -174,6 +170,14 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                         reason = format!(", as `{name}` is not declared as mutable");
                     }
                 }
+            }
+
+            // Field projection on a non-closure type (e.g. a struct field accessed
+            // through a view-restricted `&mut {view} T` borrow). The base is not a
+            // closure, so we give a generic "not declared as mutable" message.
+            PlaceRef { projection: [.., ProjectionElem::Field(_, _)], .. } => {
+                item_msg = access_place_desc;
+                reason = ", as it is not declared as mutable".to_string();
             }
 
             PlaceRef { local, projection: [ProjectionElem::Deref] }
@@ -472,11 +476,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
             PlaceRef {
                 local,
                 projection: [proj_base @ .., ProjectionElem::Field(upvar_index, _)],
-            } => {
-                debug_assert!(is_closure_like(
-                    Place::ty_from(local, proj_base, self.body, self.infcx.tcx).ty
-                ));
-
+            } if is_closure_like(Place::ty_from(local, proj_base, self.body, self.infcx.tcx).ty) => {
                 let captured_place = self.upvars[upvar_index.index()];
 
                 err.span_label(span, format!("cannot {act}"));
@@ -521,6 +521,12 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 {
                     self.show_mutating_upvar(tcx, id.expect_local(), the_place_err, &mut err);
                 }
+            }
+
+            // Field projection on a non-closure type (struct field, not a closure upvar).
+            // Just label the span; no upvar-specific suggestion applies.
+            PlaceRef { projection: [.., ProjectionElem::Field(_, _)], .. } => {
+                err.span_label(span, format!("cannot {act}"));
             }
 
             // Complete hack to approximate old AST-borrowck diagnostic: if the span starts
