@@ -249,7 +249,13 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                         | ProjectionElem::Downcast(..)
                         | ProjectionElem::UnwrapUnsafeBinder(_),
                     ],
-            } => bug!("Unexpected immutable place."),
+            } => {
+                // With view types a field can be restricted to shared access,
+                // causing index/subslice/etc. projections through it to appear
+                // immutable. Give a generic "not declared as mutable" message.
+                item_msg = access_place_desc;
+                reason = ", as it is not declared as mutable".to_string();
+            }
         }
 
         debug!("report_mutability_error: item_msg={:?}, reason={:?}", item_msg, reason);

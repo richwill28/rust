@@ -964,7 +964,12 @@ impl<'tcx> BorrowedContentSource<'tcx> {
             BorrowedContentSource::DerefRawPointer => "a `*const` pointer".to_string(),
             BorrowedContentSource::DerefSharedRef => "a `&` reference".to_string(),
             BorrowedContentSource::DerefMutableRef => {
-                bug!("describe_for_immutable_place: DerefMutableRef isn't immutable")
+                // With view types, a `&mut T` field can be restricted to shared
+                // access via a read-only view entry (e.g., `&mut {field} S`
+                // where `field: &mut T` is listed without `mut`). The field is
+                // behind a mutable reference, but the view makes it effectively
+                // immutable.
+                "a `&mut` reference (restricted to shared access by the view)".to_string()
             }
             BorrowedContentSource::OverloadedDeref(ty) => ty
                 .ty_adt_def()
