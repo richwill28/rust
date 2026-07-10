@@ -385,7 +385,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
             }
             PatKind::Binding { mode: BindingMode(ByRef::Yes(_, rm), _), ty, .. } => {
                 if self.inside_adt {
-                    let ty::Ref(_, ty, _) = ty.kind() else {
+                    let ty::Ref(_, ty, _, _) = ty.kind() else {
                         span_bug!(
                             pat.span,
                             "ByRef::Yes in pattern, but found non-reference type {}",
@@ -699,7 +699,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
                     return; // We have already visited everything by now.
                 }
             }
-            ExprKind::Borrow { borrow_kind, arg } => {
+            ExprKind::Borrow { borrow_kind, arg, .. } => {
                 let mut visitor = LayoutConstrainedPlaceVisitor::new(self.thir, self.tcx);
                 visit::walk_expr(&mut visitor, expr);
                 if visitor.found {

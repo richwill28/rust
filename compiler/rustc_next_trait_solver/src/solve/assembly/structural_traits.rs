@@ -56,7 +56,12 @@ where
             panic!("unexpected type `{ty:?}`")
         }
 
-        ty::RawPtr(element_ty, _) | ty::Ref(_, element_ty, _) => {
+        ty::RawPtr(element_ty, _) => {
+            Ok(ty::Binder::dummy(vec![element_ty]))
+        }
+
+        // Views don't affect auto trait semantics, i.e. auto traits depend on the referenced type.
+        ty::Ref(_, element_ty, _, _view) => {
             Ok(ty::Binder::dummy(vec![element_ty]))
         }
 
@@ -205,7 +210,7 @@ where
         | ty::Char
         | ty::RawPtr(..)
         | ty::Never
-        | ty::Ref(_, _, Mutability::Not)
+        | ty::Ref(_, _, Mutability::Not, _)
         | ty::Array(..) => Err(NoSolution),
 
         // Cannot implement in core, as we can't be generic over patterns yet,
@@ -216,7 +221,7 @@ where
         | ty::Str
         | ty::Slice(_)
         | ty::Foreign(..)
-        | ty::Ref(_, _, Mutability::Mut)
+        | ty::Ref(_, _, Mutability::Mut, _)
         | ty::Adt(_, _)
         | ty::Alias(_, _)
         | ty::Param(_)
@@ -382,7 +387,7 @@ pub(in crate::solve) fn extract_tupled_inputs_and_output_from_callable<I: Intern
         | ty::Array(_, _)
         | ty::Slice(_)
         | ty::RawPtr(_, _)
-        | ty::Ref(_, _, _)
+        | ty::Ref(_, _, _, _)
         | ty::Dynamic(_, _)
         | ty::Coroutine(_, _)
         | ty::CoroutineWitness(..)
@@ -556,7 +561,7 @@ pub(in crate::solve) fn extract_tupled_inputs_and_output_from_async_callable<I: 
         | ty::Pat(_, _)
         | ty::Slice(_)
         | ty::RawPtr(_, _)
-        | ty::Ref(_, _, _)
+        | ty::Ref(_, _, _, _)
         | ty::Dynamic(_, _)
         | ty::Coroutine(_, _)
         | ty::CoroutineWitness(..)
@@ -706,7 +711,7 @@ pub(in crate::solve) fn extract_fn_def_from_const_callable<I: Interner>(
         | ty::Array(_, _)
         | ty::Slice(_)
         | ty::RawPtr(_, _)
-        | ty::Ref(_, _, _)
+        | ty::Ref(_, _, _, _)
         | ty::Dynamic(_, _)
         | ty::Coroutine(_, _)
         | ty::CoroutineWitness(..)

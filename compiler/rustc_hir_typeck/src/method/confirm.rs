@@ -101,8 +101,17 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
         pick: &probe::Pick<'tcx>,
         segment: &hir::PathSegment<'tcx>,
     ) -> ConfirmResult<'tcx> {
+        // Create (preliminary) generic args for the method's type parameters.
+        // We need these first to extract the expected receiver type.
+        let preliminary_rcvr_args = self.fresh_receiver_args(unadjusted_self_ty, pick);
+        let preliminary_all_args = self.instantiate_method_args(pick, segment, preliminary_rcvr_args);
+
+        // Get the method's expected receiver type.
+        let (preliminary_sig, _) = self.instantiate_method_sig(pick, preliminary_all_args);
+        let expected_rcvr_ty = preliminary_sig.inputs()[0];
+
         // Adjust the self expression the user provided and obtain the adjusted type.
-        let self_ty = self.adjust_self_ty(unadjusted_self_ty, pick);
+        let self_ty = self.adjust_self_ty(unadjusted_self_ty, pick, expected_rcvr_ty);
 
         // Create generic args for the method's type parameters.
         let rcvr_args = self.fresh_receiver_args(self_ty, pick);
@@ -168,6 +177,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
         &mut self,
         unadjusted_self_ty: Ty<'tcx>,
         pick: &probe::Pick<'tcx>,
+        expected_rcvr_ty: Ty<'tcx>,
     ) -> Ty<'tcx> {
         // Commit the autoderefs by calling `autoderef` again, but this
         // time writing the results into the various typeck results.
@@ -188,14 +198,20 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
                 // Type we're wrapping in a reference, used later for unsizing
                 let base_ty = target;
 
-                target = Ty::new_ref(self.tcx, region, target, mutbl);
+                // Extract view constraint from the expected receiver type if it's a reference.
+                let expected_view = match expected_rcvr_ty.kind() {
+                    ty::Ref(_, _, _, view) => *view,
+                    _ => None,
+                };
+
+                target = Ty::new_ref(self.tcx, region, target, mutbl, expected_view);
 
                 // Method call receivers are the primary use case
                 // for two-phase borrows.
                 let mutbl = AutoBorrowMutability::new(mutbl, AllowTwoPhase::Yes);
 
                 adjustments
-                    .push(Adjustment { kind: Adjust::Borrow(AutoBorrow::Ref(mutbl)), target });
+                    .push(Adjustment { kind: Adjust::Borrow(AutoBorrow::Ref(mutbl, expected_view)), target });
 
                 if unsize {
                     let unsized_ty = if let ty::Array(elem_ty, _) = base_ty.kind() {
@@ -206,7 +222,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
                             base_ty
                         )
                     };
-                    target = Ty::new_ref(self.tcx, region, unsized_ty, mutbl.into());
+                    target = Ty::new_ref(self.tcx, region, unsized_ty, mutbl.into(), expected_view);
                     adjustments.push(Adjustment {
                         kind: Adjust::Pointer(PointerCoercion::Unsize),
                         target,
@@ -234,7 +250,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
                 target = match target.kind() {
                     ty::Adt(pin, args) if self.tcx.is_lang_item(pin.did(), hir::LangItem::Pin) => {
                         let inner_ty = match args[0].expect_ty().kind() {
-                            ty::Ref(_, ty, _) => *ty,
+                            ty::Ref(_, ty, _, _) => *ty,
                             _ => bug!("Expected a reference type for argument to Pin"),
                         };
                         Ty::new_pinned_ref(self.tcx, region, inner_ty, mutbl)

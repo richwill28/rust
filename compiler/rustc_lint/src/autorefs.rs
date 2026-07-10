@@ -166,7 +166,7 @@ fn peel_derefs_adjustments<'a>(mut adjs: &'a [Adjustment<'a>]) -> &'a [Adjustmen
 fn has_implicit_borrow(Adjustment { kind, .. }: &Adjustment<'_>) -> Option<(Mutability, bool)> {
     match kind {
         &Adjust::Deref(Some(OverloadedDeref { mutbl, .. })) => Some((mutbl, true)),
-        &Adjust::Borrow(AutoBorrow::Ref(mutbl)) => Some((mutbl.into(), false)),
+        &Adjust::Borrow(AutoBorrow::Ref(mutbl, _)) => Some((mutbl.into(), false)),
         Adjust::NeverToAny
         | Adjust::Pointer(..)
         | Adjust::ReborrowPin(..)

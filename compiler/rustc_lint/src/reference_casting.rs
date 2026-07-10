@@ -161,7 +161,7 @@ fn is_cast_from_ref_to_mut_ptr<'tcx>(
     let (e, need_check_freeze) = peel_casts();
 
     let start_ty = cx.typeck_results().node_type(e.hir_id);
-    if let ty::Ref(_, inner_ty, Mutability::Not) = start_ty.kind() {
+    if let ty::Ref(_, inner_ty, Mutability::Not, _) = start_ty.kind() {
         // If an UnsafeCell method is involved, we need to additionally check the
         // inner type for the presence of the Freeze trait (ie does NOT contain
         // an UnsafeCell), since in that case we would incorrectly lint on valid casts.
@@ -191,7 +191,7 @@ fn is_cast_to_bigger_memory_layout<'tcx>(
     let (e, _) = peel_casts();
     let start_ty = cx.typeck_results().node_type(e.hir_id);
 
-    let ty::Ref(_, inner_start_ty, _) = start_ty.kind() else {
+    let ty::Ref(_, inner_start_ty, _, _) = start_ty.kind() else {
         return None;
     };
 

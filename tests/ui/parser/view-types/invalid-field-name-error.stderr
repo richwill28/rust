@@ -1,0 +1,29 @@
+error: expected field name or tuple index in view
+  --> $DIR/invalid-field-name-error.rs:8:24
+   |
+LL | fn invalid_string(p: &{"field"} Point) {
+   |                        ^^^^^^^ expected a field identifier or numeric tuple index
+   |
+   = help: use field names like `field` or tuple indices like `0`, `1`
+   = note: view specifies which fields or indices to borrow: `&{field, 0, 1.2} Type`
+
+error: expected field name or tuple index in view
+  --> $DIR/invalid-field-name-error.rs:12:25
+   |
+LL | fn invalid_keyword(p: &{if} Point) {
+   |                         ^^ expected a field identifier or numeric tuple index
+   |
+   = help: use field names like `field` or tuple indices like `0`, `1`
+   = note: view specifies which fields or indices to borrow: `&{field, 0, 1.2} Type`
+
+error: expected field name or tuple index in view
+  --> $DIR/invalid-field-name-error.rs:16:24
+   |
+LL | fn invalid_symbol(p: &{+} Point) {
+   |                        ^ expected a field identifier or numeric tuple index
+   |
+   = help: use field names like `field` or tuple indices like `0`, `1`
+   = note: view specifies which fields or indices to borrow: `&{field, 0, 1.2} Type`
+
+error: aborting due to 3 previous errors
+

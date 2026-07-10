@@ -194,7 +194,7 @@ struct Unpromotable;
 impl<'tcx> Validator<'_, 'tcx> {
     fn validate_candidate(&mut self, candidate: Candidate) -> Result<(), Unpromotable> {
         let Left(statement) = self.body.stmt_at(candidate.location) else { bug!() };
-        let Some((_, Rvalue::Ref(_, kind, place))) = statement.kind.as_assign() else { bug!() };
+        let Some((_, Rvalue::Ref(_, kind, place, _))) = statement.kind.as_assign() else { bug!() };
 
         // We can only promote interior borrows of promotable temps (non-temps
         // don't get promoted anyway).
@@ -571,7 +571,7 @@ impl<'tcx> Validator<'_, 'tcx> {
                 return Err(Unpromotable);
             }
 
-            Rvalue::Ref(_, kind, place) => {
+            Rvalue::Ref(_, kind, place, _) => {
                 // Special-case reborrows to be more like a copy of the reference.
                 let mut place_simplified = place.as_ref();
                 if let Some((place_base, ProjectionElem::Deref)) =
@@ -880,7 +880,7 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
             let local_decls = &mut self.source.local_decls;
             let loc = candidate.location;
             let statement = &mut blocks[loc.block].statements[loc.statement_index];
-            let StatementKind::Assign(box (_, Rvalue::Ref(region, borrow_kind, place))) =
+            let StatementKind::Assign(box (_, Rvalue::Ref(region, borrow_kind, place, view))) =
                 &mut statement.kind
             else {
                 bug!()
@@ -891,8 +891,9 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
             let ty = local_decls[place.local].ty;
             let span = statement.source_info.span;
 
+            let ty_view = view.map(|v| tcx.mir_view_to_ty_view(v));
             let ref_ty =
-                Ty::new_ref(tcx, tcx.lifetimes.re_erased, ty, borrow_kind.to_mutbl_lossy());
+                Ty::new_ref(tcx, tcx.lifetimes.re_erased, ty, borrow_kind.to_mutbl_lossy(), ty_view);
 
             let mut projection = vec![PlaceElem::Deref];
             projection.extend(place.projection);
@@ -924,6 +925,7 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
                         local: mem::replace(&mut place.local, promoted_ref),
                         projection: List::empty(),
                     },
+                    *view,
                 ),
                 promoted_operand,
             )

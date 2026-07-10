@@ -1,0 +1,41 @@
+// MIR for `pass_normal_mut_ref` after built
+
+fn pass_normal_mut_ref() -> () {
+    let mut _0: ();
+    let mut _1: MyStruct;
+    let _3: ();
+    let mut _4: &{field1} MyStruct;
+    scope 1 {
+        debug x => _1;
+        let _2: &mut MyStruct;
+        scope 2 {
+            debug r => _2;
+        }
+    }
+
+    bb0: {
+        StorageLive(_1);
+        _1 = MyStruct { field1: const 10_i32, field2: const 20_i32 };
+        FakeRead(ForLet(None), _1);
+        StorageLive(_2);
+        _2 = &mut _1;
+        FakeRead(ForLet(None), _2);
+        StorageLive(_3);
+        StorageLive(_4);
+        _4 = &{field1} (*_2);
+        _3 = take_view_ref(move _4) -> [return: bb1, unwind: bb2];
+    }
+
+    bb1: {
+        StorageDead(_4);
+        StorageDead(_3);
+        _0 = const ();
+        StorageDead(_2);
+        StorageDead(_1);
+        return;
+    }
+
+    bb2 (cleanup): {
+        resume;
+    }
+}

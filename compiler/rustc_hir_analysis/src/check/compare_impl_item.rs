@@ -942,20 +942,38 @@ impl<'tcx> ty::FallibleTypeFolder<TyCtxt<'tcx>> for RemapHiddenTyRegions<'tcx> {
 }
 
 /// Gets the string for an explicit self declaration, e.g. "self", "&self",
-/// etc.
+/// "&{x, y} self", etc.
 fn get_self_string<'tcx, P>(self_arg_ty: Ty<'tcx>, is_self_ty: P) -> String
 where
     P: Fn(Ty<'tcx>) -> bool,
 {
     if is_self_ty(self_arg_ty) {
         "self".to_owned()
-    } else if let ty::Ref(_, ty, mutbl) = self_arg_ty.kind()
+    } else if let ty::Ref(_, ty, mutbl, view) = self_arg_ty.kind()
         && is_self_ty(*ty)
     {
-        match mutbl {
-            hir::Mutability::Not => "&self".to_owned(),
-            hir::Mutability::Mut => "&mut self".to_owned(),
+        let mut result = match mutbl {
+            hir::Mutability::Not => "&".to_owned(),
+            hir::Mutability::Mut => "&mut ".to_owned(),
+        };
+        if let Some(view) = view {
+            result.push('{');
+            for (i, field) in view.iter().enumerate() {
+                if i > 0 {
+                    result.push_str(", ");
+                }
+                result.push_str(field.mutbl.prefix_str());
+                for (j, segment) in field.path.iter().enumerate() {
+                    if j > 0 {
+                        result.push('.');
+                    }
+                    result.push_str(segment.as_str());
+                }
+            }
+            result.push_str("} ");
         }
+        result.push_str("self");
+        result
     } else {
         format!("self: {self_arg_ty}")
     }

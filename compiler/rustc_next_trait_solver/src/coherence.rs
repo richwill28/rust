@@ -409,7 +409,7 @@ where
             }
 
             // For fundamental types, we just look inside of them.
-            ty::Ref(_, ty, _) => ty.visit_with(self),
+            ty::Ref(_, ty, _, _) => ty.visit_with(self),
             ty::Adt(def, args) => {
                 if self.def_id_is_local(def.def_id()) {
                     ControlFlow::Break(OrphanCheckEarlyExit::LocalTy(ty))

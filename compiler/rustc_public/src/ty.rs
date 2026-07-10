@@ -45,8 +45,8 @@ impl Ty {
     }
 
     /// Create a new reference type.
-    pub fn new_ref(reg: Region, pointee_ty: Ty, mutability: Mutability) -> Ty {
-        Ty::from_rigid_kind(RigidTy::Ref(reg, pointee_ty, mutability))
+    pub fn new_ref(reg: Region, pointee_ty: Ty, mutability: Mutability, view: Option<View>) -> Ty {
+        Ty::from_rigid_kind(RigidTy::Ref(reg, pointee_ty, mutability, view))
     }
 
     /// Create a new pointer type.
@@ -303,6 +303,19 @@ impl LineInfo {
     }
 }
 
+/// A view field specifying which struct field is accessible and with what mutability.
+/// Used in view types like `&{field1, mut field2} T`.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
+pub struct ViewField {
+    /// The field path being accessed (e.g., ["a", "b", "c"] for nested field access).
+    pub path: Vec<Symbol>,
+    /// The mutability of access to this field.
+    pub mutbl: Mutability,
+}
+
+/// A view is a list of field paths that can be accessed through a reference.
+pub type View = Vec<ViewField>;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum TyKind {
     RigidTy(RigidTy),
@@ -433,7 +446,7 @@ impl TyKind {
         matches!(
             self,
             TyKind::RigidTy(RigidTy::RawPtr(_, Mutability::Mut))
-                | TyKind::RigidTy(RigidTy::Ref(_, _, Mutability::Mut))
+                | TyKind::RigidTy(RigidTy::Ref(_, _, Mutability::Mut, _))
         )
     }
 
@@ -502,7 +515,10 @@ impl TyKind {
             RigidTy::Adt(def, args) if def.is_box() => {
                 Some(TypeAndMut { ty: *args.0.first()?.ty()?, mutability: Mutability::Not })
             }
-            RigidTy::Ref(_, ty, mutability) => {
+            // The semantics of dereferencing a view-restricted reference is undefined.
+            // But we allow it here because this function is used to determine pointee
+            // types during type checking, where the view is not relevant.
+            RigidTy::Ref(_, ty, mutability, _) => {
                 Some(TypeAndMut { ty: *ty, mutability: *mutability })
             }
             RigidTy::RawPtr(ty, mutability) if explicit => {
@@ -556,7 +572,7 @@ pub enum RigidTy {
     Pat(Ty, Pattern),
     Slice(Ty),
     RawPtr(Ty, Mutability),
-    Ref(Region, Ty, Mutability),
+    Ref(Region, Ty, Mutability, Option<View>),
     FnDef(FnDef, GenericArgs),
     FnPtr(PolyFnSig),
     Closure(ClosureDef, GenericArgs),

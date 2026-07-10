@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{env, str};
 
 use rustc_ast as ast;
@@ -374,6 +374,11 @@ pub fn run_compiler(at_args: &[String], callbacks: &mut (dyn Callbacks + Send)) 
                 return early_exit();
             }
 
+            // Run the Aeneas verification pipeline if -Zaeneas is set.
+            if sess.opts.unstable_opts.aeneas {
+                run_aeneas_pipeline(sess);
+            }
+
             if tcx.sess.opts.output_types.contains_key(&OutputType::Mir) {
                 if let Err(error) = rustc_mir_transform::dump_mir::emit_mir(tcx) {
                     tcx.dcx().emit_fatal(CantEmitMIR { error });
@@ -401,6 +406,172 @@ fn dump_feature_usage_metrics(tcxt: TyCtxt<'_>, metrics_dir: &Path) {
         // default metrics" to only produce a warning when metrics are enabled by default and emit
         // an error only when the user manually enables metrics
         tcxt.dcx().emit_err(UnstableFeatureUsage { error });
+    }
+}
+
+/// Run the Aeneas borrow checking pipeline on the current crate.
+///
+/// Charon translates Rust MIR into LLBC, then Aeneas borrow-checks the LLBC.
+///
+/// TODO(view): This is inefficient in the sense that Charon's `rustc`
+/// subcommand re-runs the entire Rust compiler frontend internally (parsing,
+/// resolution, type-checking, MIR generation) on the same source file. The
+/// source is therefore compiled twice: once by *this* rustc invocation (which
+/// has already completed analysis by the time we get here), and a second time
+/// by Charon's internal driver.
+///
+/// This double compilation could be eliminated by calling Charon's
+/// `translate()` function directly within our `TyCtxt<'tcx>` lifetime,
+/// since that function already takes a bare `TyCtxt` and returns an owned,
+/// rustc-free `TransformCtx`. The main obstacles are:
+///   (a) The translation code currently lives in Charon's binary crate
+///       (`src/bin/charon-driver/translate/`) rather than a library crate.
+///   (b) Charon hooks at `after_expansion` to access `mir_built()`, which
+///       is stolen by later passes, so our `after_analysis` hook would
+///       need to move earlier or use `override_queries` to preserve MIR.
+fn run_aeneas_pipeline(sess: &Session) {
+    let Some(input_path) = sess.io.input.opt_path() else {
+        sess.dcx().warn("cannot run aeneas on string input");
+        return;
+    };
+
+    // Locate the charon and aeneas binaries via environment variables.
+    // Both CHARON_BIN and AENEAS_BIN must be set to absolute paths.
+    let Some(charon_bin) = env::var_os("CHARON_BIN").map(PathBuf::from) else {
+        sess.dcx().warn(
+            "-Zaeneas requires the CHARON_BIN environment variable to point \
+             to the `charon` binary (e.g. CHARON_BIN=/path/to/charon)"
+        );
+        return;
+    };
+    let Some(aeneas_bin) = env::var_os("AENEAS_BIN").map(PathBuf::from) else {
+        sess.dcx().warn(
+            "-Zaeneas requires the AENEAS_BIN environment variable to point \
+             to the `aeneas` binary (e.g. AENEAS_BIN=/path/to/aeneas)"
+        );
+        return;
+    };
+
+    // Phase 1: Charon (Rust MIR -> LLBC)
+    // Build the LLBC output path from the input file's stem, e.g. foo.rs -> foo.llbc.
+    // Place it next to the input file (or in --out-dir if specified).
+    let dest_dir = sess.io.output_dir.clone().unwrap_or_default();
+    let filestem = sess.io.input.filestem();
+    let llbc_file = dest_dir.join(format!("{filestem}.llbc"));
+
+    // Inform the user that the Charon translation is starting.
+    sess.dcx().note(format!(
+        "charon: translating `{}` to LLBC",
+        input_path.to_string_lossy(),
+    ));
+
+    // Invoke Charon in "rustc" mode: it re-runs the Rust compiler frontend
+    // internally, extracts MIR, and serialises it as LLBC to --dest-file.
+    // --skip-borrowck tells Charon to disable rustc's borrow checker internally
+    // (Aeneas will do its own borrow checking on the LLBC instead).
+    // Everything after `--` is forwarded as rustc arguments (here, the input file).
+    let charon_status = Command::new(&charon_bin)
+        .arg("rustc")
+        .arg("--preset=aeneas")
+        .arg("--skip-borrowck")
+        .arg("--dest-file")
+        .arg(&llbc_file)
+        .arg("--")
+        .arg(input_path)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status();
+
+    // Check whether Charon succeeded; abort the pipeline on failure.
+    match charon_status {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            sess.dcx().warn(format!(
+                "charon exited with status {s}"
+            ));
+            return;
+        }
+        Err(e) => {
+            sess.dcx().warn(format!(
+                "failed to run charon at `{}`: {e}",
+                charon_bin.display()
+            ));
+            return;
+        }
+    }
+
+    // Phase 2: Aeneas (borrow check the LLBC)
+    // Inform the user that borrow checking is starting.
+    sess.dcx().note(format!(
+        "aeneas: borrow checking `{}`",
+        llbc_file.to_string_lossy(),
+    ));
+
+    // Run Aeneas in borrow-check-only mode (no code generation).
+    // It reads the LLBC file produced by Charon and verifies ownership
+    // and borrowing invariants.
+    //
+    // A timeout (AENEAS_TIMEOUT env var, default 60s) guards against hangs.
+    let timeout_secs: u64 = env::var("AENEAS_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    let timeout = Duration::from_secs(timeout_secs);
+
+    let mut child = match Command::new(&aeneas_bin)
+        .arg("-borrow-check")
+        .arg(&llbc_file)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            sess.dcx().warn(format!(
+                "failed to run aeneas at `{}`: {e}",
+                aeneas_bin.display()
+            ));
+            return;
+        }
+    };
+
+    let start = Instant::now();
+    let aeneas_status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break Err(format!(
+                        "aeneas timed out after {timeout_secs}s \
+                         (set AENEAS_TIMEOUT)"
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                break Err(format!(
+                    "failed to wait on aeneas at `{}`: {e}",
+                    aeneas_bin.display()
+                ));
+            }
+        }
+    };
+
+    // Report the outcome of the borrow check.
+    match aeneas_status {
+        Ok(s) if s.success() => {
+            sess.dcx().note("aeneas borrow check succeeded");
+        }
+        Ok(s) => {
+            sess.dcx().warn(format!(
+                "aeneas borrow check failed (exit status {s})"
+            ));
+        }
+        Err(msg) => {
+            sess.dcx().warn(msg);
+        }
     }
 }
 

@@ -200,7 +200,7 @@ impl<I: Interner> TypeVisitor<I> for OutlivesCollector<'_, I> {
             | ty::Pat(_, _)
             | ty::Slice(_)
             | ty::RawPtr(_, _)
-            | ty::Ref(_, _, _)
+            | ty::Ref(_, _, _, _)
             | ty::FnPtr(..)
             | ty::UnsafeBinder(_)
             | ty::Dynamic(_, _)

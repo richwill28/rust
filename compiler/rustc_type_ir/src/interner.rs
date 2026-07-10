@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::ops::Deref;
 
@@ -36,6 +36,19 @@ pub trait Interner:
     fn next_trait_solver_globally(self) -> bool {
         true
     }
+
+    /// Check if two views are semantically equivalent for unification purposes.
+    /// Two views may unify if they grant the same permissions (same field set, order-independent).
+    /// Note: `None` represents a maximally permissive view (all fields).
+    fn views_may_unify(
+        self,
+        a_view: Option<Self::View>,
+        a_ty: Self::Ty,
+        a_mutbl: rustc_ast_ir::Mutability,
+        b_view: Option<Self::View>,
+        b_ty: Self::Ty,
+        b_mutbl: rustc_ast_ir::Mutability,
+    ) -> bool;
 
     type DefId: DefId<Self>;
     type LocalDefId: Copy + Debug + Hash + Eq + Into<Self::DefId> + TypeFoldable<Self>;
@@ -145,6 +158,8 @@ pub trait Interner:
         + SliceLike<Item = Self::Pat>;
     type Safety: Safety<Self>;
     type Abi: Abi<Self>;
+    type View: Copy + Debug + Hash + Eq + SliceLike<Item = Self::ViewField>;
+    type ViewField: Copy + Debug + Display + Hash + Eq;
 
     // Kinds of consts
     type Const: Const<Self>;

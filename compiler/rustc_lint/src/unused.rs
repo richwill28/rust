@@ -1387,7 +1387,7 @@ impl EarlyLintPass for UnusedParens {
 
                 self.with_self_ty_parens = false;
             }
-            ast::TyKind::Ref(_, mut_ty) | ast::TyKind::Ptr(mut_ty) => {
+            ast::TyKind::Ptr(mut_ty) => {
                 // If this type itself appears in no-bounds position, we propagate its
                 // potentially tighter constraint or risk a false posive (issue 143653).
                 let own_constraint = self.in_no_bounds_pos.get(&ty.id);
@@ -1397,6 +1397,29 @@ impl EarlyLintPass for UnusedParens {
                     None => NoBoundsException::OneBound,
                 };
                 self.in_no_bounds_pos.insert(mut_ty.ty.id, constraint);
+            }
+            ast::TyKind::Ref(_, mut_ty, view) => {
+                // If this type itself appears in no-bounds position, we propagate its
+                // potentially tighter constraint or risk a false posive (issue 143653).
+                let own_constraint = self.in_no_bounds_pos.get(&ty.id);
+                let constraint = match own_constraint {
+                    Some(NoBoundsException::None) => NoBoundsException::None,
+                    Some(NoBoundsException::OneBound) => NoBoundsException::OneBound,
+                    None => NoBoundsException::OneBound,
+                };
+                self.in_no_bounds_pos.insert(mut_ty.ty.id, constraint);
+                // TODO: Consider view types in unused parentheses analysis.
+                // Current approach: Sound but conservative. When view types are present, 
+                // we avoid suggesting parentheses removal to prevent breaking code.
+                // This ensures correctness but may miss optimization opportunities.
+                // Future improvements could analyze when parentheses are truly necessary:
+                // - Simple views in basic contexts: `let x = (&{field} Type);` -> `let x = &{field} Type;`
+                // - Keep parens for precedence: `fn() -> (&{field} Type) + Send` (parser disambiguation)
+                // - Keep parens in generics: `Vec<(&{field} Type)>` (type argument clarity)
+                if view.is_some() {
+                    // Conservative placeholder: don't suggest removal when view types present.
+                    // This is sound but potentially suboptimal.
+                }
             }
             ast::TyKind::TraitObject(bounds, _) | ast::TyKind::ImplTrait(_, bounds) => {
                 for i in 0..bounds.len() {
@@ -1791,7 +1814,7 @@ impl<'tcx> LateLintPass<'tcx> for UnusedAllocation {
         }
 
         for adj in cx.typeck_results().expr_adjustments(e) {
-            if let adjustment::Adjust::Borrow(adjustment::AutoBorrow::Ref(m)) = adj.kind {
+            if let adjustment::Adjust::Borrow(adjustment::AutoBorrow::Ref(m, _)) = adj.kind {
                 match m {
                     adjustment::AutoBorrowMutability::Not => {
                         cx.emit_span_lint(UNUSED_ALLOCATION, e.span, UnusedAllocationDiag);

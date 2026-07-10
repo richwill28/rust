@@ -119,7 +119,9 @@ pub(crate) fn write_ref_like<'tcx>(
     subpattern: &str,
 ) -> fmt::Result {
     match ty.kind() {
-        ty::Ref(_, _, mutbl) => {
+        // TODO: View is ignored because the semantics of pattern matching with views
+        // is not yet well-defined.
+        ty::Ref(_, _, mutbl, _view) => {
             write!(f, "&{}", mutbl.prefix_str())?;
         }
         _ => bug!("{ty} is a bad ref pattern type"),

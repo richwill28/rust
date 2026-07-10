@@ -14,11 +14,13 @@ use rustc_span::def_id::LocalDefId;
 use rustc_span::source_map::Spanned;
 use rustc_span::{Span, Symbol};
 use rustc_target::asm::InlineAsmRegOrRegClass;
+use rustc_type_ir::VisitorResult;
 use smallvec::SmallVec;
 
 use super::{BasicBlock, Const, Local, UserTypeProjection};
 use crate::mir::coverage::CoverageKind;
 use crate::ty::adjustment::PointerCoercion;
+use crate::ty::TyCtxt;
 use crate::ty::{self, GenericArgsRef, List, Region, Ty, UserTypeAnnotationIndex};
 
 /// Represents the "flavors" of MIR.
@@ -296,6 +298,114 @@ pub enum FakeBorrowKind {
     /// }
     /// ```
     Deep,
+}
+
+///////////////////////////////////////////////////////////////////////////
+// View types for MIR
+//
+// These are MIR-specific view types that use BorrowKind instead of Mutability.
+// This allows MIR to represent richer borrow semantics (two-phase, fake, etc.)
+// that are not expressible at the type level.
+
+/// A MIR view is a list of view fields specifying field-level borrow restrictions.
+pub type View<'tcx> = &'tcx List<ViewField<'tcx>>;
+
+/// A MIR view field specifying which struct field is accessible and with what kind of borrow.
+/// Unlike `ty::ViewField` which uses `Mutability`, this uses `BorrowKind` to represent
+/// MIR-specific borrow semantics like two-phase borrows.
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(HashStable)]
+pub struct ViewField<'tcx> {
+    /// The field path being accessed (e.g., `a.b.c` for nested field access).
+    pub path: &'tcx [Symbol],
+    /// The kind of borrow.
+    pub kind: BorrowKind,
+}
+
+impl<'tcx> ViewField<'tcx> {
+    /// Create a new MIR view field with the given path and borrow kind.
+    pub fn new(path: &'tcx [Symbol], kind: BorrowKind) -> ViewField<'tcx> {
+        ViewField { path, kind }
+    }
+
+    /// Create a MIR view field from a type-level view field.
+    /// Converts `Mutability` to an appropriate `BorrowKind`.
+    pub fn from_ty_view_field(ty_field: ty::ViewField<'tcx>) -> ViewField<'tcx> {
+        let kind = match ty_field.mutbl {
+            Mutability::Not => BorrowKind::Shared,
+            Mutability::Mut => BorrowKind::Mut { kind: MutBorrowKind::Default },
+        };
+        ViewField { path: ty_field.path, kind }
+    }
+
+    /// Convert a MIR view field back to a type-level view field.
+    /// This converts `BorrowKind` to the corresponding `Mutability`,
+    /// losing information about two-phase borrows, fake borrows, etc.
+    pub fn to_ty_view_field(self) -> ty::ViewField<'tcx> {
+        ty::ViewField { path: self.path, mutbl: self.kind.to_mutbl_lossy() }
+    }
+}
+
+impl std::fmt::Display for ViewField<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            BorrowKind::Shared => {}
+            BorrowKind::Fake(FakeBorrowKind::Deep) => write!(f, "fake ")?,
+            BorrowKind::Fake(FakeBorrowKind::Shallow) => write!(f, "fake shallow ")?,
+            BorrowKind::Mut { kind: MutBorrowKind::Default } => write!(f, "mut ")?,
+            BorrowKind::Mut { kind: MutBorrowKind::TwoPhaseBorrow } => write!(f, "two-phase ")?,
+            BorrowKind::Mut { kind: MutBorrowKind::ClosureCapture } => write!(f, "uniq ")?,
+        }
+        for (i, &sym) in self.path.iter().enumerate() {
+            if i > 0 {
+                write!(f, ".")?;
+            }
+            write!(f, "{}", sym)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'tcx, E: crate::ty::codec::TyEncoder<'tcx>> rustc_serialize::Encodable<E>
+    for ViewField<'tcx>
+{
+    fn encode(&self, e: &mut E) {
+        self.path.encode(e);
+        self.kind.encode(e);
+    }
+}
+
+impl<'tcx, D: crate::ty::codec::TyDecoder<'tcx>> rustc_serialize::Decodable<D>
+    for ViewField<'tcx>
+{
+    fn decode(d: &mut D) -> Self {
+        let path: Vec<Symbol> = rustc_serialize::Decodable::decode(d);
+        let path = d.interner().arena.alloc_slice(&path);
+        let kind = rustc_serialize::Decodable::decode(d);
+        ViewField { path, kind }
+    }
+}
+
+impl<'tcx> rustc_type_ir::TypeFoldable<TyCtxt<'tcx>> for ViewField<'tcx> {
+    fn try_fold_with<F: rustc_type_ir::FallibleTypeFolder<TyCtxt<'tcx>>>(
+        self,
+        _folder: &mut F,
+    ) -> Result<Self, F::Error> {
+        Ok(self)
+    }
+
+    fn fold_with<F: rustc_type_ir::TypeFolder<TyCtxt<'tcx>>>(self, _folder: &mut F) -> Self {
+        self
+    }
+}
+
+impl<'tcx> rustc_type_ir::TypeVisitable<TyCtxt<'tcx>> for ViewField<'tcx> {
+    fn visit_with<V: rustc_type_ir::TypeVisitor<TyCtxt<'tcx>>>(
+        &self,
+        _visitor: &mut V,
+    ) -> V::Result {
+        V::Result::output()
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -1371,7 +1481,12 @@ pub enum Rvalue<'tcx> {
     /// exactly what the behavior of this operation should be.
     ///
     /// `Shallow` borrows are disallowed after drop lowering.
-    Ref(Region<'tcx>, BorrowKind, Place<'tcx>),
+    ///
+    /// The optional view parameter restricts which fields of the place can be accessed through
+    /// this reference (e.g., `&{field} x` only allows accessing `x.field`).
+    /// Note: This uses `mir::View` (with `BorrowKind`) rather than `ty::View` (with `Mutability`)
+    /// to support MIR-specific borrow semantics like two-phase borrows.
+    Ref(Region<'tcx>, BorrowKind, Place<'tcx>, Option<View<'tcx>>),
 
     /// Creates a pointer/reference to the given thread local.
     ///

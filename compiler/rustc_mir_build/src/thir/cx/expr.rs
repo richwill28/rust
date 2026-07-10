@@ -153,11 +153,12 @@ impl<'tcx> ThirBuildCx<'tcx> {
 
                 expr = Expr {
                     temp_scope_id,
-                    ty: Ty::new_ref(self.tcx, self.tcx.lifetimes.re_erased, expr.ty, deref.mutbl),
+                    ty: Ty::new_ref(self.tcx, self.tcx.lifetimes.re_erased, expr.ty, deref.mutbl, None),
                     span,
                     kind: ExprKind::Borrow {
                         borrow_kind: deref.mutbl.to_borrow_kind(),
                         arg: self.thir.exprs.push(expr),
+                        view: None,
                     },
                 };
 
@@ -171,9 +172,22 @@ impl<'tcx> ThirBuildCx<'tcx> {
                     deref.span,
                 )
             }
-            Adjust::Borrow(AutoBorrow::Ref(m)) => ExprKind::Borrow {
-                borrow_kind: m.to_borrow_kind(),
-                arg: self.thir.exprs.push(expr),
+            Adjust::Borrow(AutoBorrow::Ref(m, view)) => {
+                let borrow_kind = m.to_borrow_kind();
+                let mir_view = view.map(|v| {
+                    let base_view = self.tcx.ty_view_to_mir_view(v);
+                    // If this is a two-phase borrow, propagate that into the view.
+                    if matches!(borrow_kind, BorrowKind::Mut { kind: mir::MutBorrowKind::TwoPhaseBorrow }) {
+                        self.tcx.propagate_two_phase_to_view(base_view)
+                    } else {
+                        base_view
+                    }
+                });
+                ExprKind::Borrow {
+                    borrow_kind,
+                    arg: self.thir.exprs.push(expr),
+                    view: mir_view,
+                }
             },
             Adjust::Borrow(AutoBorrow::RawPtr(mutability)) => {
                 ExprKind::RawBorrow { mutability, arg: self.thir.exprs.push(expr) }
@@ -189,7 +203,7 @@ impl<'tcx> ThirBuildCx<'tcx> {
                 };
                 let pin_ty = pin_ty_args.iter().next().unwrap().expect_ty();
                 let ptr_target_ty = match pin_ty.kind() {
-                    ty::Ref(_, ty, _) => *ty,
+                    ty::Ref(_, ty, _, _) => *ty,
                     _ => bug!("ReborrowPin with non-Ref type"),
                 };
 
@@ -217,12 +231,12 @@ impl<'tcx> ThirBuildCx<'tcx> {
                     hir::Mutability::Not => BorrowKind::Shared,
                 };
                 let new_pin_target =
-                    Ty::new_ref(self.tcx, self.tcx.lifetimes.re_erased, ptr_target_ty, mutbl);
+                    Ty::new_ref(self.tcx, self.tcx.lifetimes.re_erased, ptr_target_ty, mutbl, None);
                 let expr = self.thir.exprs.push(Expr {
                     temp_scope_id,
                     ty: new_pin_target,
                     span,
-                    kind: ExprKind::Borrow { borrow_kind, arg },
+                    kind: ExprKind::Borrow { borrow_kind, arg, view: None },
                 });
 
                 // kind = Pin { __pointer: pointer }
@@ -474,7 +488,14 @@ impl<'tcx> ThirBuildCx<'tcx> {
             }
 
             hir::ExprKind::AddrOf(hir::BorrowKind::Ref, mutbl, arg) => {
-                ExprKind::Borrow { borrow_kind: mutbl.to_borrow_kind(), arg: self.mirror_expr(arg) }
+                // Extract view from the expression's type to avoid creating borrows that are too wide.
+                // When the type checker assigns type `&{view} T` to this borrow expression,
+                // we extract the view and use it directly.
+                let view = match expr_ty.kind() {
+                    ty::Ref(_, _, _, Some(ty_view)) => Some(self.tcx.ty_view_to_mir_view(*ty_view)),
+                    _ => None,
+                };
+                ExprKind::Borrow { borrow_kind: mutbl.to_borrow_kind(), arg: self.mirror_expr(arg), view }
             }
 
             hir::ExprKind::AddrOf(hir::BorrowKind::Raw, mutability, arg) => {
@@ -513,7 +534,7 @@ impl<'tcx> ThirBuildCx<'tcx> {
                         temp_scope_id: expr.hir_id.local_id,
                         ty,
                         span: expr.span,
-                        kind: ExprKind::Borrow { borrow_kind: mutbl.to_borrow_kind(), arg },
+                        kind: ExprKind::Borrow { borrow_kind: mutbl.to_borrow_kind(), arg, view: None },
                     });
                     ExprKind::Adt(Box::new(AdtExpr {
                         adt_def,
@@ -1330,10 +1351,10 @@ impl<'tcx> ThirBuildCx<'tcx> {
         // Reconstruct the output assuming it's a reference with the
         // same region and mutability as the receiver. This holds for
         // `Deref(Mut)::deref(_mut)` and `Index(Mut)::index(_mut)`.
-        let ty::Ref(region, _, mutbl) = *self.thir[args[0]].ty.kind() else {
+        let ty::Ref(region, _, mutbl, view) = *self.thir[args[0]].ty.kind() else {
             span_bug!(span, "overloaded_place: receiver is not a reference");
         };
-        let ref_ty = Ty::new_ref(self.tcx, region, place_ty, mutbl);
+        let ref_ty = Ty::new_ref(self.tcx, region, place_ty, mutbl, view);
 
         // construct the complete expression `foo()` for the overloaded call,
         // which will yield the &T type
@@ -1429,7 +1450,7 @@ impl<'tcx> ThirBuildCx<'tcx> {
                     kind: ExprKind::ByUse { expr: expr_id, span },
                 }
             }
-            ty::UpvarCapture::ByRef(upvar_borrow) => {
+            ty::UpvarCapture::ByRef(upvar_borrow, upvar_view) => {
                 let borrow_kind = match upvar_borrow {
                     ty::BorrowKind::Immutable => BorrowKind::Shared,
                     ty::BorrowKind::UniqueImmutable => {
@@ -1439,6 +1460,7 @@ impl<'tcx> ThirBuildCx<'tcx> {
                         BorrowKind::Mut { kind: mir::MutBorrowKind::Default }
                     }
                 };
+                let mir_view = upvar_view.map(|v| self.tcx.ty_view_to_mir_view(v));
                 Expr {
                     temp_scope_id,
                     ty: upvar_ty,
@@ -1446,6 +1468,7 @@ impl<'tcx> ThirBuildCx<'tcx> {
                     kind: ExprKind::Borrow {
                         borrow_kind,
                         arg: self.thir.exprs.push(captured_place_expr),
+                        view: mir_view,
                     },
                 }
             }

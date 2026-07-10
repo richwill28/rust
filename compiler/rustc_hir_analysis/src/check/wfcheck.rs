@@ -897,7 +897,7 @@ fn check_param_wf(tcx: TyCtxt<'_>, param: &ty::GenericParamDef) -> Result<(), Er
                                 ty::Array(ty, ..) | ty::Slice(ty) => ty_is_local(*ty),
                                 // `&` references use the inner type's `ConstParamTy`.
                                 // `&mut` are not supported.
-                                ty::Ref(_, ty, ast::Mutability::Not) => ty_is_local(*ty),
+                                ty::Ref(_, ty, ast::Mutability::Not, _) => ty_is_local(*ty),
                                 // Say that a tuple is local if any of its components are local.
                                 // This is not strictly correct, but it's likely that the user can fix the local component.
                                 ty::Tuple(tys) => tys.iter().any(|ty| ty_is_local(ty)),
@@ -1866,11 +1866,20 @@ fn receiver_is_valid<'tcx>(
                 break;
             }
 
+            // For references with views, strip the view since LegacyReceiver is
+            // implemented for the base reference type, not the view type.
+            let ty_for_bound = match potential_self_ty.kind() {
+                ty::Ref(region, ty, mutbl, Some(_view)) => {
+                    Ty::new_ref(tcx, *region, *ty, *mutbl, None)
+                }
+                _ => potential_self_ty,
+            };
+
             // Register the bound, in case it has any region side-effects.
             wfcx.register_bound(
                 cause.clone(),
                 wfcx.param_env,
-                potential_self_ty,
+                ty_for_bound,
                 legacy_receiver_trait_def_id,
             );
         }
@@ -1887,7 +1896,17 @@ fn legacy_receiver_is_implemented<'tcx>(
     receiver_ty: Ty<'tcx>,
 ) -> bool {
     let tcx = wfcx.tcx();
-    let trait_ref = ty::TraitRef::new(tcx, legacy_receiver_trait_def_id, [receiver_ty]);
+
+    // For references with views, strip the view when checking LegacyReceiver.
+    // Views only restrict field access and don't change the receiver semantics.
+    let receiver_ty_for_check = match receiver_ty.kind() {
+        ty::Ref(region, ty, mutbl, Some(_view)) => {
+            Ty::new_ref(tcx, *region, *ty, *mutbl, None)
+        }
+        _ => receiver_ty,
+    };
+
+    let trait_ref = ty::TraitRef::new(tcx, legacy_receiver_trait_def_id, [receiver_ty_for_check]);
 
     let obligation = Obligation::new(tcx, cause, wfcx.param_env, trait_ref);
 

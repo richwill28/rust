@@ -1146,11 +1146,16 @@ fn find_tails_for_unsizing<'tcx>(
 
     match (source_ty.kind(), target_ty.kind()) {
         (&ty::Pat(source, _), &ty::Pat(target, _)) => find_tails_for_unsizing(tcx, source, target),
+
+        // View should be ignored when peeling references during unsizing.
         (
-            &ty::Ref(_, source_pointee, _),
-            &ty::Ref(_, target_pointee, _) | &ty::RawPtr(target_pointee, _),
-        )
-        | (&ty::RawPtr(source_pointee, _), &ty::RawPtr(target_pointee, _)) => {
+            &ty::Ref(_, source_pointee, _, _view),
+            &ty::Ref(_, target_pointee, _, _) | &ty::RawPtr(target_pointee, _),
+        ) => {
+            tcx.struct_lockstep_tails_for_codegen(source_pointee, target_pointee, typing_env)
+        }
+
+        (&ty::RawPtr(source_pointee, _), &ty::RawPtr(target_pointee, _)) => {
             tcx.struct_lockstep_tails_for_codegen(source_pointee, target_pointee, typing_env)
         }
 

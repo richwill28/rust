@@ -784,6 +784,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                                 tcx.lifetimes.re_erased,
                                 BorrowKind::Fake(FakeBorrowKind::Shallow),
                                 Place { local: base_place.local, projection },
+                                None,
                             ),
                         );
                         fake_borrow_temps.push(fake_borrow_temp);

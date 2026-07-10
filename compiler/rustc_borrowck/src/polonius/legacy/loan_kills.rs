@@ -117,10 +117,11 @@ impl<'tcx> LoanKillsGenerator<'_, 'tcx> {
 
                 if let Some(borrow_indices) = self.borrow_set.local_map.get(&local) {
                     for &borrow_index in borrow_indices {
-                        let places_conflict = places_conflict::places_conflict(
+                        let places_conflict = places_conflict::places_conflict_with_view(
                             self.tcx,
                             self.body,
                             self.borrow_set[borrow_index].borrowed_place,
+                            self.borrow_set[borrow_index].view,
                             place,
                             places_conflict::PlaceConflictBias::NoOverlap,
                         );

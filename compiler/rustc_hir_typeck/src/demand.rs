@@ -829,7 +829,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         error: Option<TypeError<'tcx>>,
     ) -> bool {
         if let Some(TypeError::Sorts(ExpectedFound { .. })) = error
-            && let ty::Ref(_, inner, hir::Mutability::Not) = expected.kind()
+            && let ty::Ref(_, inner, hir::Mutability::Not, _) = expected.kind()
 
             // The difference between the expected and found values is one level of borrowing.
             && self.can_eq(self.param_env, *inner, expr_ty)
@@ -861,7 +861,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 .inputs
                 .iter()
                 .filter_map(|ty| match ty.kind {
-                    hir::TyKind::Ref(lt, mut_ty) if ty.span == *ty_span => Some((lt, mut_ty)),
+                    hir::TyKind::Ref(lt, mut_ty, _) if ty.span == *ty_span => Some((lt, mut_ty)),
                     _ => None,
                 })
                 .next()
@@ -967,8 +967,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 });
                 let mutability =
                     match self.tcx.fn_sig(m.def_id).skip_binder().input(0).skip_binder().kind() {
-                        ty::Ref(_, _, hir::Mutability::Mut) => "&mut ",
-                        ty::Ref(_, _, _) => "&",
+                        ty::Ref(_, _, hir::Mutability::Mut, _) => "&mut ",
+                        ty::Ref(_, _, _, _) => "&",
                         _ => "",
                     };
                 vec![

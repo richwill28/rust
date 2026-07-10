@@ -45,7 +45,7 @@ impl UpvarId {
 /// during `typeck`, specifically by `regionck`.
 #[derive(Eq, PartialEq, Clone, Debug, Copy, TyEncodable, TyDecodable, HashStable, Hash)]
 #[derive(TypeFoldable, TypeVisitable)]
-pub enum UpvarCapture {
+pub enum UpvarCapture<'tcx> {
     /// Upvar is captured by value. This is always true when the
     /// closure is labeled `move`, but can also be true in other cases
     /// depending on inference.
@@ -54,8 +54,10 @@ pub enum UpvarCapture {
     /// Upvar is captured by use. This is true when the closure is labeled `use`.
     ByUse,
 
-    /// Upvar is captured by reference.
-    ByRef(BorrowKind),
+    /// Upvar is captured by reference, optionally restricted to a view.
+    /// When `Some(view)`, the closure captures `&[mut] {view} T` instead of `&[mut] T`,
+    /// allowing the borrow checker to see that only the specified fields are accessed.
+    ByRef(BorrowKind, Option<ty::View<'tcx>>),
 }
 
 /// Given the closure DefId this map provides a map of root variables to minimum
@@ -84,7 +86,7 @@ pub struct CapturedPlace<'tcx> {
     pub place: HirPlace<'tcx>,
 
     /// `CaptureKind` and expression(s) that resulted in such capture of `place`.
-    pub info: CaptureInfo,
+    pub info: CaptureInfo<'tcx>,
 
     /// Represents if `place` can be mutated or not.
     pub mutability: hir::Mutability,
@@ -257,7 +259,7 @@ pub fn is_ancestor_or_same_capture(
 /// that triggered this capture to occur.
 #[derive(Eq, PartialEq, Clone, Debug, Copy, TyEncodable, TyDecodable, HashStable, Hash)]
 #[derive(TypeFoldable, TypeVisitable)]
-pub struct CaptureInfo {
+pub struct CaptureInfo<'tcx> {
     /// Expr Id pointing to use that resulted in selecting the current capture kind
     ///
     /// Eg:
@@ -295,7 +297,7 @@ pub struct CaptureInfo {
     pub path_expr_id: Option<HirId>,
 
     /// Capture mode that was selected
-    pub capture_kind: UpvarCapture,
+    pub capture_kind: UpvarCapture<'tcx>,
 }
 
 pub fn place_to_string_for_capture<'tcx>(tcx: TyCtxt<'tcx>, place: &HirPlace<'tcx>) -> String {

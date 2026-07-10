@@ -302,7 +302,7 @@ fn lint_wide_pointer<'tcx>(
         let mut refs = 0;
         // here we remove any "implicit" references and count the number
         // of them to correctly suggest the right number of deref
-        while let ty::Ref(_, inner_ty, _) = ty.kind() {
+        while let ty::Ref(_, inner_ty, _, _) = ty.kind() {
             ty = *inner_ty;
             refs += 1;
         }
@@ -428,7 +428,7 @@ fn lint_fn_pointer<'tcx>(
     let peel_refs = |mut ty: Ty<'tcx>| -> (Ty<'tcx>, usize) {
         let mut refs = 0;
 
-        while let ty::Ref(_, inner_ty, _) = ty.kind() {
+        while let ty::Ref(_, inner_ty, _, _) = ty.kind() {
             ty = *inner_ty;
             refs += 1;
         }
@@ -796,7 +796,7 @@ fn get_nullable_type<'tcx>(
         ty::Int(_) | ty::Uint(_) | ty::RawPtr(..) => ty,
         // As these types are always non-null, the nullable equivalent of
         // `Option<T>` of these types are their raw pointer counterparts.
-        ty::Ref(_region, ty, mutbl) => Ty::new_ptr(tcx, ty, mutbl),
+        ty::Ref(_region, ty, mutbl, _) => Ty::new_ptr(tcx, ty, mutbl),
         // There is no nullable equivalent for Rust's function pointers,
         // you must use an `Option<fn(..) -> _>` to represent it.
         ty::FnPtr(..) => ty,

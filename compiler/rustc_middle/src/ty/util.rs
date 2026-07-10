@@ -1466,7 +1466,7 @@ impl<'tcx> Ty<'tcx> {
     /// - `&'a *const &'b u8 -> *const &'b u8`
     pub fn peel_refs(self) -> Ty<'tcx> {
         let mut ty = self;
-        while let ty::Ref(_, inner_ty, _) = ty.kind() {
+        while let ty::Ref(_, inner_ty, _, _) = ty.kind() {
             ty = *inner_ty;
         }
         ty

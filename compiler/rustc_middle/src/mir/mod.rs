@@ -1694,7 +1694,7 @@ pub fn find_self_call<'tcx>(
             if let StatementKind::Assign(box (place, rvalue)) = &stmt.kind
                 && let Some(reborrow_local) = place.as_local()
                 && self_place.as_local() == Some(reborrow_local)
-                && let Rvalue::Ref(_, _, deref_place) = rvalue
+                && let Rvalue::Ref(_, _, deref_place, _) = rvalue
                 && let PlaceRef { local: deref_local, projection: [ProjectionElem::Deref] } =
                     deref_place.as_ref()
                 && deref_local == local

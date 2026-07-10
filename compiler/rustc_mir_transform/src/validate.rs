@@ -1146,7 +1146,7 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
                     }
                 }
             },
-            Rvalue::Ref(_, BorrowKind::Fake(_), _) => {
+            Rvalue::Ref(_, BorrowKind::Fake(_), _, _) => {
                 if self.body.phase >= MirPhase::Runtime(RuntimePhase::Initial) {
                     self.fail(
                         location,

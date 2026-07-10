@@ -485,7 +485,10 @@ impl<'tcx> Printer<'tcx> for V0SymbolMangler<'tcx> {
 
             ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Error(_) => bug!(),
 
-            ty::Ref(r, ty, mutbl) => {
+            // View is ignored. It's a compile-time borrow checking constraint that doesn't
+            // affect ABI or runtime representation. Two references differing only in view
+            // restrictions must have identical mangled symbols for correct linking.
+            ty::Ref(r, ty, mutbl, _view) => {
                 self.push(match mutbl {
                     hir::Mutability::Not => "R",
                     hir::Mutability::Mut => "Q",
@@ -743,7 +746,8 @@ impl<'tcx> Printer<'tcx> for V0SymbolMangler<'tcx> {
 
             // FIXME(valtrees): Remove the special case for `str`
             // here and fully support unsized constants.
-            ty::Ref(_, _, mutbl) => {
+            // View is ignored: constant values don't include compile-time borrow checking constraints.
+            ty::Ref(_, _, mutbl, _view) => {
                 self.push(match mutbl {
                     hir::Mutability::Not => "R",
                     hir::Mutability::Mut => "Q",

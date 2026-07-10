@@ -773,7 +773,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         if let (
             hir::ExprKind::AddrOf(_borrow_kind, _borrow_mutability, borrowed_expr),
-            ty::Ref(_ty_region, ty_ref_type, _ty_mutability),
+            ty::Ref(_ty_region, ty_ref_type, _ty_mutability, _ty_view),
         ) = (&expr.kind, in_ty.kind())
         {
             // We can "drill into" the borrowed expression.

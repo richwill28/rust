@@ -51,7 +51,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         |InferOk { value: method, obligations: o }| {
                             obligations.extend(o);
                             // FIXME: we should assert the sig is &T here... there's no reason for this to be fallible.
-                            if let ty::Ref(_, _, mutbl) = *method.sig.output().kind() {
+                            if let ty::Ref(_, _, mutbl, _) = *method.sig.output().kind() {
                                 Some(OverloadedDeref { mutbl, span: autoderef.span() })
                             } else {
                                 None

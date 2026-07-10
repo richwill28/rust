@@ -61,7 +61,7 @@ use crate::diagnostics::{
 };
 use crate::path_utils::*;
 use crate::place_ext::PlaceExt;
-use crate::places_conflict::{PlaceConflictBias, places_conflict};
+use crate::places_conflict::{PlaceConflictBias, places_conflict, places_conflict_with_view};
 use crate::polonius::legacy::{
     PoloniusFacts, PoloniusFactsExt, PoloniusLocationTable, PoloniusOutput,
 };
@@ -121,6 +121,14 @@ fn mir_borrowck(
     assert!(!tcx.is_typeck_child(def.to_def_id()));
     let (input_body, _) = tcx.mir_promoted(def);
     debug!("run query mir_borrowck: {}", tcx.def_path_str(def));
+
+    // When -Zaeneas is set, skip rustc's borrow checker entirely.
+    // Aeneas will perform its own borrow checking on the LLBC.
+    if tcx.sess.opts.unstable_opts.aeneas {
+        debug!("Skipping borrowck because -Zaeneas is set");
+        let opaque_types = Default::default();
+        return Ok(tcx.arena.alloc(opaque_types));
+    }
 
     let input_body: &Body<'_> = &input_body.borrow();
     if let Some(guar) = input_body.tainted_by_errors {
@@ -1447,6 +1455,59 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
         );
     }
 
+    /// Resolve a view's fields to projected `Place`s.
+    ///
+    /// Given a `place` whose type is an ADT (struct) and a `view` restricting
+    /// which fields are accessible, return a `Vec` of `(field_place, borrow_kind)`
+    /// pairs, one per view field. Returns `None` if the view is empty, the
+    /// place type is not a struct, or any field cannot be resolved.
+    ///
+    /// A view borrow like `&mut {mut a, b} *s` only needs access to the
+    /// fields named in the view, `(*s).a` mutably, `(*s).b` immutably,
+    /// rather than the entire place `*s`. This helper decomposes the view
+    /// into individual `(Place, BorrowKind)` pairs that can be checked
+    /// independently via `access_place`.
+    ///
+    /// This is used by `consume_rvalue` (at the borrow site, for all
+    /// borrow kinds) and by `check_activations` (at the activation site,
+    /// for two-phase borrows only) to ensure identical per-field
+    /// decomposition in both phases.
+    fn resolve_view_fields(
+        &self,
+        place: Place<'tcx>,
+        view: View<'tcx>,
+    ) -> Option<Vec<(Place<'tcx>, BorrowKind)>> {
+        if view.is_empty() {
+            return None;
+        }
+        let tcx = self.infcx.tcx;
+        let body = self.body;
+        let base_ty = place.ty(body, tcx).ty;
+        let mut fields = Vec::with_capacity(view.len());
+        for vf in view.iter() {
+            // Walk the full path (e.g. `[a, b]` -> project Field(a) then Field(b)).
+            let mut current_place = place;
+            let mut current_ty = base_ty;
+            for &field_name in vf.path.iter() {
+                let ty::Adt(adt_def, args) = current_ty.kind() else {
+                    return None;
+                };
+                if !adt_def.is_struct() {
+                    return None;
+                }
+                let variant = adt_def.non_enum_variant();
+                let (field_idx, field_def) =
+                    variant.fields.iter_enumerated().find(|(_, f)| f.name == field_name)?;
+                let field_ty = field_def.ty(tcx, args);
+                current_place = current_place
+                    .project_deeper(&[ProjectionElem::Field(field_idx, field_ty)], tcx);
+                current_ty = field_ty;
+            }
+            fields.push((current_place, vf.kind));
+        }
+        Some(fields)
+    }
+
     fn consume_rvalue(
         &mut self,
         location: Location,
@@ -1454,7 +1515,30 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
         state: &BorrowckDomain,
     ) {
         match rvalue {
-            &Rvalue::Ref(_ /*rgn*/, bk, place) => {
+            // When a `Rvalue::Ref` carries a view (e.g. `&mut {mut a, b} *s`),
+            // the borrow only accesses the fields named in the view, not the
+            // entire place `*s`. We decompose the single `access_place(*s)`
+            // call into per-field `access_place((*s).a)`, `access_place((*s).b)`
+            // calls, each with the appropriate access kind:
+            //   - `mut` fields in the view -> same access as the overall borrow
+            //     (Write or Reservation for `&mut`, Read for `&`)
+            //   - non-`mut` fields -> Read (the view only grants shared access)
+            //
+            // A view borrow `&mut {mut a, b} *s` semantically borrows `(*s).a`
+            // mutably and `(*s).b` immutably. Checking each field individually
+            // ensures:
+            //   1. We detect real conflicts: if `(*s).a` is already mutably
+            //      borrowed, reserving `(*s).a` again correctly fails.
+            //   2. We allow disjoint access: an existing borrow of `(*s).c` does
+            //      not conflict with `(*s).a` or `(*s).b`.
+            //
+            // Note: `check_activations` must perform the same per-field
+            // decomposition at activation time, see its comment for why.
+            //
+            // When `resolve_view_fields` returns `None` (no view, or
+            // unresolvable), we fall back to checking the whole place, which is
+            // conservative (sound, but potentially over-restrictive).
+            &Rvalue::Ref(_ /*rgn*/, bk, place, view) => {
                 let access_kind = match bk {
                     BorrowKind::Fake(FakeBorrowKind::Shallow) => {
                         (Shallow(Some(ArtificialField::FakeBorrow)), Read(ReadKind::Borrow(bk)))
@@ -1472,13 +1556,35 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                     }
                 };
 
-                self.access_place(
-                    location,
-                    (place, span),
-                    access_kind,
-                    LocalMutationIsAllowed::No,
-                    state,
-                );
+                // Resolve view fields to per-field Places. See comment above.
+                let per_field = view.and_then(|view| self.resolve_view_fields(place, view));
+
+                if let Some(field_accesses) = per_field {
+                    for (field_place, vf_kind) in field_accesses {
+                        // Mut view fields need the full access (Write/Reservation);
+                        // shared view fields only need Read.
+                        let field_access = match vf_kind {
+                            BorrowKind::Mut { .. } => access_kind,
+                            _ => (Deep, Read(ReadKind::Borrow(BorrowKind::Shared))),
+                        };
+                        self.access_place(
+                            location,
+                            (field_place, span),
+                            field_access,
+                            LocalMutationIsAllowed::No,
+                            state,
+                        );
+                    }
+                } else {
+                    // No view or unresolvable, check the whole place (conservative).
+                    self.access_place(
+                        location,
+                        (place, span),
+                        access_kind,
+                        LocalMutationIsAllowed::No,
+                        state,
+                    );
+                }
 
                 let action = if bk == BorrowKind::Fake(FakeBorrowKind::Shallow) {
                     InitializationRequiringAction::MatchOn
@@ -1618,8 +1724,89 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                 // Handle (a)
                 if proj == ProjectionElem::Deref {
                     match place_ref.ty(this.body(), this.infcx.tcx).ty.kind() {
-                        // We aren't modifying a variable directly
-                        ty::Ref(_, _, hir::Mutability::Mut) => return,
+                        // We aren't modifying a variable directly.
+                        //
+                        // Without views, any deref of `&mut T` means the mutation
+                        // flows through a mutable reference, so the parent's local
+                        // doesn't need `mut`, we just `return`.
+                        //
+                        // With views, `&mut {mut a, b} T` grants mutable access to
+                        // field `a` but only shared access to `b`. If the closure
+                        // mutates through `(*ref).b`, that mutation does NOT flow
+                        // through the mut-ref's write permission (field `b` is
+                        // shared in the view). We must `continue` the reverse walk
+                        // so the mutation is attributed to the parent local (case b)
+                        // or upvar (case c), ensuring `mut` is correctly required.
+                        //
+                        // Correctness:
+                        // - If the field IS mutable in the view (or no view exists),
+                        //   we `return`, same as the original code. The mutation
+                        //   is explained by the `&mut` reference.
+                        // - If the field is shared in the view, we `continue`,
+                        //   the deref doesn't explain the mutation, so we keep
+                        //   searching upward for the true source of mutability.
+                        // - If the projection after the deref is not a Field (e.g.
+                        //   index, subslice), we conservatively `return`, the view
+                        //   only restricts named fields.
+                        ty::Ref(_, _, hir::Mutability::Mut, view) => {
+                            if let Some(view) = view {
+                                // Build the full field name path from the Deref
+                                // to the end of the place, then check if a `mut`
+                                // view field's path is a prefix of (or equal to)
+                                // the access path. If so, the mutation flows
+                                // through the view's mut grant -> `return`. If
+                                // a shared view field covers it -> `continue`
+                                // (mutation not explained by this mut-ref).
+                                let deref_pos = place_ref.projection.len();
+                                let suffix = &place.projection[deref_pos + 1..];
+                                let deref_ty = place_ref
+                                    .ty(this.body(), this.infcx.tcx)
+                                    .projection_ty(this.infcx.tcx, proj)
+                                    .ty;
+                                let mut access_path: Vec<Symbol> = Vec::new();
+                                let mut cur_ty = deref_ty;
+                                let mut path_ok = true;
+                                for &p in suffix {
+                                    if let ProjectionElem::Field(idx, ty) = p
+                                        && let Some(adt) = cur_ty.ty_adt_def()
+                                        && let Some(f) =
+                                            adt.non_enum_variant().fields.get(idx)
+                                    {
+                                        access_path.push(f.name);
+                                        cur_ty = ty;
+                                    } else {
+                                        if matches!(p, ProjectionElem::Field(..)) {
+                                            path_ok = false;
+                                        }
+                                        break;
+                                    }
+                                }
+                                if path_ok && !access_path.is_empty() {
+                                    // Check if the mutation is covered by a
+                                    // view field (prefix matching).
+                                    let mut is_shared = false;
+                                    let mut is_mut = false;
+                                    for vf in view.iter() {
+                                        if access_path.len() >= vf.path.len()
+                                            && access_path[..vf.path.len()] == *vf.path
+                                        {
+                                            match vf.mutbl {
+                                                hir::Mutability::Mut => is_mut = true,
+                                                hir::Mutability::Not => is_shared = true,
+                                            }
+                                        }
+                                    }
+                                    if is_shared && !is_mut {
+                                        // Shared in view, mutation not
+                                        // explained by this mut-ref.
+                                        continue;
+                                    }
+                                    // If is_mut, fall through to `return`.
+                                    // If neither, conservatively `return`.
+                                }
+                            }
+                            return;
+                        }
 
                         _ => {}
                     }
@@ -1683,7 +1870,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                         match stmt.kind {
                             StatementKind::Assign(box (
                                 _,
-                                Rvalue::Ref(_, _, source)
+                                Rvalue::Ref(_, _, source, _)
                                 | Rvalue::Use(Operand::Copy(source) | Operand::Move(source)),
                             )) => {
                                 propagate_closure_used_mut_place(self, source);
@@ -1788,6 +1975,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
             self.body,
             place,
             borrow.kind,
+            borrow.view,
             root_place,
             sd,
             places_conflict::PlaceConflictBias::Overlap,
@@ -1820,10 +2008,27 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
         }
     }
 
+    /// Checks two-phase borrow activations at the given location.
+    ///
+    /// Two-phase borrows split a mutable borrow into a reservation (at the
+    /// `Rvalue::Ref`) and an activation (at the call site). For view borrows,
+    /// `consume_rvalue` checks each view field individually at reservation
+    /// time (e.g. `(*s).a` and `(*s).b` rather than the whole place `*s`).
+    /// This method must perform the same per-field decomposition for two
+    /// reasons:
+    ///
+    /// 1. Checking the whole place `*s` would conflict with any existing
+    ///    borrow overlapping `*s`, even if the borrow's view only touches
+    ///    disjoint fields. Per-field checking preserves field-level granularity
+    ///    so that borrows of sibling fields do not interfere.
+    ///
+    /// 2. When a per-field reservation fails, `reservation_error_reported`
+    ///    records the field-projected place (e.g. `(*s).a`). If this method
+    ///    checked the whole place `*s` instead, `access_place` would not find
+    ///    `*s` in `reservation_error_reported` (only `(*s).a` is there), so it
+    ///    would proceed to `check_access_for_conflict` and emit a second
+    ///    diagnostic for the same conflict.
     fn check_activations(&mut self, location: Location, span: Span, state: &BorrowckDomain) {
-        // Two-phase borrow support: For each activation that is newly
-        // generated at this statement, check if it interferes with
-        // another borrow.
         for &borrow_index in self.borrow_set.activations_at_location(location) {
             let borrow = &self.borrow_set[borrow_index];
 
@@ -1833,13 +2038,49 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                 BorrowKind::Mut { .. } => true,
             });
 
-            self.access_place(
-                location,
-                (borrow.borrowed_place, span),
-                (Deep, Activation(WriteKind::MutableBorrow(borrow.kind), borrow_index)),
-                LocalMutationIsAllowed::No,
-                state,
-            );
+            let activation_access =
+                (Deep, Activation(WriteKind::MutableBorrow(borrow.kind), borrow_index));
+
+            let per_field = borrow
+                .view
+                .and_then(|view| self.resolve_view_fields(borrow.borrowed_place, view));
+
+            if let Some(field_accesses) = per_field {
+                for (field_place, vf_kind) in field_accesses {
+                    // Only activate mut view fields. Shared view fields don't
+                    // need activation: they were already validated as Read
+                    // during reservation (in `consume_rvalue`), and the
+                    // in-scope reservation borrow prevents new conflicting
+                    // borrows from being created between reservation and
+                    // activation.
+                    //
+                    // Emitting a Read access for shared fields here would
+                    // cause a spurious self-conflict: the `Read` would find
+                    // the borrow being activated (which is Mut and now active
+                    // at this location) as a conflict, but the self-skip in
+                    // `check_access_for_conflict` only applies to the
+                    // `Activation` access kind, not `Read`.
+                    if !vf_kind.allows_two_phase_borrow() {
+                        continue;
+                    }
+                    self.access_place(
+                        location,
+                        (field_place, span),
+                        activation_access,
+                        LocalMutationIsAllowed::No,
+                        state,
+                    );
+                }
+            } else {
+                // No view, activate the whole place (original behavior).
+                self.access_place(
+                    location,
+                    (borrow.borrowed_place, span),
+                    activation_access,
+                    LocalMutationIsAllowed::No,
+                    state,
+                );
+            }
             // We do not need to call `check_if_path_or_subpath_is_moved`
             // again, as we already called it when we made the
             // initial reservation.
@@ -1925,7 +2166,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                     | ty::Pat(_, _)
                     | ty::Slice(_)
                     | ty::RawPtr(_, _)
-                    | ty::Ref(_, _, _)
+                    | ty::Ref(_, _, _, _)
                     | ty::FnDef(_, _)
                     | ty::FnPtr(..)
                     | ty::Dynamic(_, _)
@@ -2500,6 +2741,138 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
         }
     }
 
+    /// Check if `place` passes through a Deref of a view-typed reference,
+    /// and if so, whether the full field path from the Deref to the end
+    /// of the place is mutable according to the view.
+    ///
+    /// Given `r: &mut {mut a, b} S`, the view grants mutable access to
+    /// field `a` but only shared access to field `b`. Examples:
+    ///
+    /// - `(*r).a`     -> `Some(Ok(..))`: `a` is `mut` in the view.
+    /// - `(*r).a.x`   -> `Some(Ok(..))`: `mut a` covers subfields of `a`.
+    /// - `(*r).b`     -> `Some(Err(..))`: `b` is shared in the view.
+    /// - `(*r).c`     -> `Some(Err(..))`: `c` is not in the view at all.
+    /// - `*r`         -> `None`: bare Deref with no field; `is_mutable()`
+    ///                   handles this via its `ProjectionElem::Deref` arm.
+    /// - `x.f`        -> `None`: no view-ref Deref in the place;
+    ///                   `is_mutable()` handles via normal recursion.
+    ///
+    /// For nested view field paths like `&mut {mut a.b} S`:
+    ///
+    /// - `(*r).a.b`   -> `Some(Ok(..))`: full path `a.b` matches `mut a.b`.
+    /// - `(*r).a.b.x` -> `Some(Ok(..))`: `mut a.b` covers subfields.
+    /// - `(*r).a`     -> `Some(Err(..))`: `a` alone is a *parent* of the
+    ///                   view field `a.b`, not covered by it.
+    fn check_view_path_mutability(
+        &self,
+        place: PlaceRef<'tcx>,
+        is_local_mutation_allowed: LocalMutationIsAllowed,
+    ) -> Option<Result<RootPlace<'tcx>, PlaceRef<'tcx>>> {
+        let tcx = self.infcx.tcx;
+        let body = self.body();
+
+        // Find the last Deref in the projection that goes through a view-ref.
+        let mut view_deref_idx = None;
+        for (i, &proj) in place.projection.iter().enumerate() {
+            if proj == ProjectionElem::Deref {
+                let base = PlaceRef { local: place.local, projection: &place.projection[..i] };
+                let base_ty = base.ty(body, tcx).ty;
+                if let ty::Ref(_, _, hir::Mutability::Mut, Some(_)) = base_ty.kind() {
+                    view_deref_idx = Some(i);
+                }
+            }
+        }
+        let deref_idx = view_deref_idx?;
+
+        // Extract the view from the reference type.
+        let deref_base =
+            PlaceRef { local: place.local, projection: &place.projection[..deref_idx] };
+        let ref_ty = deref_base.ty(body, tcx).ty;
+        let ty::Ref(_, _, _, Some(view)) = ref_ty.kind() else {
+            return None;
+        };
+
+        // Build the field name path from projections after the Deref.
+        let suffix = &place.projection[deref_idx + 1..];
+        if suffix.is_empty() {
+            // Accessing the Deref itself (e.g. `*ref`), not a field.
+            // Return None so `is_mutable()` falls through to its
+            // projection-by-projection recursion, which handles the
+            // Deref via the `ty::Ref(_, _, mutbl, _)` arm.
+            return None;
+        }
+
+        let mut access_path: Vec<Symbol> = Vec::new();
+        let mut current_ty =
+            PlaceRef { local: place.local, projection: &place.projection[..=deref_idx] }
+                .ty(body, tcx)
+                .ty;
+        for &proj_elem in suffix {
+            match proj_elem {
+                ProjectionElem::Field(idx, ty) => {
+                    if let Some(adt_def) = current_ty.ty_adt_def() {
+                        if let Some(field_def) =
+                            adt_def.non_enum_variant().fields.get(idx)
+                        {
+                            access_path.push(field_def.name);
+                            current_ty = ty;
+                        } else {
+                            // Can't resolve field; fall back to `is_mutable()`'s
+                            // projection-by-projection recursion.
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+                _ => {
+                    // Non-field projection (Index, Deref, etc.) after the view.
+                    // Stop building the path; the portion we have is enough to
+                    // match against the view. If we gathered at least one field,
+                    // proceed with matching. Otherwise, fall back to
+                    // `is_mutable()`'s projection-by-projection recursion.
+                    if access_path.is_empty() {
+                        return None;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if access_path.is_empty() {
+            return None;
+        }
+
+        // Match access_path against view field paths.
+        // A `mut` view field whose path is a prefix of (or equal to) the
+        // access path makes the place mutable. A shared view field whose
+        // path is a prefix makes it immutable. If no view field's path is
+        // a prefix, the access is not covered by the view.
+        for vf in view.iter() {
+            let vf_path = vf.path;
+            // Check if vf_path is a prefix of (or equal to) access_path.
+            if access_path.len() >= vf_path.len()
+                && access_path[..vf_path.len()] == *vf_path
+            {
+                return Some(match vf.mutbl {
+                    hir::Mutability::Not => Err(place),
+                    hir::Mutability::Mut => {
+                        let mode = match self.is_upvar_field_projection(place) {
+                            Some(field) if self.upvars[field.index()].is_by_ref() => {
+                                is_local_mutation_allowed
+                            }
+                            _ => LocalMutationIsAllowed::Yes,
+                        };
+                        self.is_mutable(deref_base, mode)
+                    }
+                });
+            }
+        }
+
+        // No view field covers this access path → not mutable.
+        Some(Err(place))
+    }
+
     /// Whether this value can be written or borrowed mutably.
     /// Returns the root place if the place passed in is a projection.
     fn is_mutable(
@@ -2508,6 +2881,28 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
         is_local_mutation_allowed: LocalMutationIsAllowed,
     ) -> Result<RootPlace<'tcx>, PlaceRef<'tcx>> {
         debug!("is_mutable: place={:?}, is_local...={:?}", place, is_local_mutation_allowed);
+
+        // The recursive one-projection-at-a-time design can't properly
+        // handle multi-segment view field paths like `mut a.b`. When the
+        // recursion reaches `(*ref).a`, it has already stripped the `.b`
+        // and can't distinguish "direct write to `a`" from "intermediate
+        // step while checking `(*ref).a.b`". We solve this by checking
+        // the FULL place here, before recursion.
+        //
+        // Scan the projection for the last Deref through a view-ref.
+        // If found, build the complete field name path from the Deref to
+        // the end of the place, and match against view field paths:
+        //   - A `mut` view field whose path is a prefix of (or equal to)
+        //     the access path -> mutable (recurse on deref_base for
+        //     uniqueness).
+        //   - A shared view field whose path is a prefix of the access
+        //     path -> not mutable.
+        //   - No matching prefix -> not mutable (field not covered by
+        //     view, or access is to a parent of a view field).
+        if let Some(result) = self.check_view_path_mutability(place, is_local_mutation_allowed) {
+            return result;
+        }
+
         match place.last_projection() {
             None => {
                 let local = &self.body.local_decls[place.local];
@@ -2539,7 +2934,9 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
 
                         // Check the kind of deref to decide
                         match base_ty.kind() {
-                            ty::Ref(_, _, mutbl) => {
+                            // Per-field mutability is already resolved
+                            // by `check_view_path_mutability` at the top.
+                            ty::Ref(_, _, mutbl, _) => {
                                 match mutbl {
                                     // Shared borrowed data is never mutable
                                     hir::Mutability::Not => Err(place),
@@ -2599,6 +2996,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                     | ProjectionElem::OpaqueCast { .. }
                     | ProjectionElem::Downcast(..)
                     | ProjectionElem::UnwrapUnsafeBinder(_) => {
+                        // Per-field mutability is already resolved
+                        // by `check_view_path_mutability` at the top.
                         let upvar_field_projection = self.is_upvar_field_projection(place);
                         if let Some(field) = upvar_field_projection {
                             let upvar = &self.upvars[field.index()];

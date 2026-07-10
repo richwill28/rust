@@ -84,6 +84,10 @@ pub struct BorrowData<'tcx> {
     pub(crate) borrowed_place: mir::Place<'tcx>,
     /// Place to which the borrow was stored
     pub(crate) assigned_place: mir::Place<'tcx>,
+    /// Optional view restricting which fields of the borrowed place are accessible.
+    /// When `Some`, the borrow only covers the fields named in the view, enabling
+    /// disjoint borrows of non-overlapping field sets.
+    pub(crate) view: Option<mir::View<'tcx>>,
 }
 
 // These methods are public to support borrowck consumers.
@@ -111,6 +115,10 @@ impl<'tcx> BorrowData<'tcx> {
     pub fn assigned_place(&self) -> mir::Place<'tcx> {
         self.assigned_place
     }
+
+    pub fn view(&self) -> Option<mir::View<'tcx>> {
+        self.view
+    }
 }
 
 impl<'tcx> fmt::Display for BorrowData<'tcx> {
@@ -125,6 +133,21 @@ impl<'tcx> fmt::Display for BorrowData<'tcx> {
                 kind: mir::MutBorrowKind::Default | mir::MutBorrowKind::TwoPhaseBorrow,
             } => "mut ",
         };
+        if let Some(view) = self.view {
+            write!(w, "&{{")?;
+            for (i, field) in view.iter().enumerate() {
+                if i > 0 {
+                    write!(w, ", ")?;
+                }
+                let kind_prefix = match field.kind {
+                    mir::BorrowKind::Mut { .. } => "mut ",
+                    _ => "",
+                };
+                let path_str: Vec<_> = field.path.iter().map(|s| s.as_str()).collect();
+                write!(w, "{}{}", kind_prefix, path_str.join("."))?;
+            }
+            write!(w, "}} ")?;
+        }
         write!(w, "&{:?} {}{:?}", self.region, kind, self.borrowed_place)
     }
 }
@@ -246,7 +269,7 @@ impl<'a, 'tcx> Visitor<'tcx> for GatherBorrows<'a, 'tcx> {
         rvalue: &mir::Rvalue<'tcx>,
         location: mir::Location,
     ) {
-        if let &mir::Rvalue::Ref(region, kind, borrowed_place) = rvalue {
+        if let &mir::Rvalue::Ref(region, kind, borrowed_place, view) = rvalue {
             if borrowed_place.ignore_borrow(self.tcx, self.body, &self.locals_state_at_exit) {
                 debug!("ignoring_borrow of {:?}", borrowed_place);
                 return;
@@ -261,6 +284,7 @@ impl<'a, 'tcx> Visitor<'tcx> for GatherBorrows<'a, 'tcx> {
                 activation_location: TwoPhaseActivation::NotTwoPhase,
                 borrowed_place,
                 assigned_place: *assigned_place,
+                view,
             };
             let (idx, _) = self.location_map.insert_full(location, borrow);
             let idx = BorrowIndex::from(idx);
@@ -321,7 +345,7 @@ impl<'a, 'tcx> Visitor<'tcx> for GatherBorrows<'a, 'tcx> {
     }
 
     fn visit_rvalue(&mut self, rvalue: &mir::Rvalue<'tcx>, location: mir::Location) {
-        if let &mir::Rvalue::Ref(region, kind, place) = rvalue {
+        if let &mir::Rvalue::Ref(region, kind, place, view) = rvalue {
             // double-check that we already registered a BorrowData for this
 
             let borrow_data = &self.location_map[&location];
@@ -329,6 +353,7 @@ impl<'a, 'tcx> Visitor<'tcx> for GatherBorrows<'a, 'tcx> {
             assert_eq!(borrow_data.kind, kind);
             assert_eq!(borrow_data.region, region.as_var());
             assert_eq!(borrow_data.borrowed_place, place);
+            assert_eq!(borrow_data.view, view);
         }
 
         self.super_rvalue(rvalue, location)

@@ -142,7 +142,7 @@ impl<'tcx> InstSimplifyContext<'_, 'tcx> {
 
     /// Transform `&(*a)` ==> `a`.
     fn simplify_ref_deref(&self, rvalue: &mut Rvalue<'tcx>) {
-        if let Rvalue::Ref(_, _, place) | Rvalue::RawPtr(_, place) = rvalue
+        if let Rvalue::Ref(_, _, place, _) | Rvalue::RawPtr(_, place) = rvalue
             && let Some((base, ProjectionElem::Deref)) = place.as_ref().last_projection()
             && rvalue.ty(self.local_decls, self.tcx) == base.ty(self.local_decls, self.tcx).ty
         {
@@ -234,7 +234,7 @@ impl<'tcx> InstSimplifyContext<'_, 'tcx> {
         // doing DefId lookups to figure out what we're actually calling.
         let arg_ty = arg.node.ty(self.local_decls, self.tcx);
 
-        let ty::Ref(_region, inner_ty, Mutability::Not) = *arg_ty.kind() else { return };
+        let ty::Ref(_region, inner_ty, Mutability::Not, _) = *arg_ty.kind() else { return };
 
         if !self.tcx.is_lang_item(fn_def_id, LangItem::CloneFn)
             || !inner_ty.is_trivially_pure_clone_copy()

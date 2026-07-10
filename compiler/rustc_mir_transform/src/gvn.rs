@@ -447,11 +447,11 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
 
     /// Create a new `Value::Address` distinct from all the others.
     #[instrument(level = "trace", skip(self), ret)]
-    fn new_pointer(&mut self, place: Place<'tcx>, kind: AddressKind) -> Option<VnIndex> {
+    fn new_pointer(&mut self, place: Place<'tcx>, kind: AddressKind, view: Option<ty::View<'tcx>>) -> Option<VnIndex> {
         let pty = place.ty(self.local_decls, self.tcx).ty;
         let ty = match kind {
             AddressKind::Ref(bk) => {
-                Ty::new_ref(self.tcx, self.tcx.lifetimes.re_erased, pty, bk.to_mutbl_lossy())
+                Ty::new_ref(self.tcx, self.tcx.lifetimes.re_erased, pty, bk.to_mutbl_lossy(), view)
             }
             AddressKind::Address(mutbl) => Ty::new_ptr(self.tcx, pty, mutbl.to_mutbl_lossy()),
         };
@@ -1037,13 +1037,14 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
             }
             Rvalue::NullaryOp(op) => Value::NullaryOp(op),
             Rvalue::Aggregate(..) => return self.simplify_aggregate(lhs, rvalue, location),
-            Rvalue::Ref(_, borrow_kind, ref mut place) => {
+            Rvalue::Ref(_, borrow_kind, ref mut place, view) => {
                 self.simplify_place_projection(place, location);
-                return self.new_pointer(*place, AddressKind::Ref(borrow_kind));
+                let ty_view = view.map(|v| self.tcx.mir_view_to_ty_view(v));
+                return self.new_pointer(*place, AddressKind::Ref(borrow_kind), ty_view);
             }
             Rvalue::RawPtr(mutbl, ref mut place) => {
                 self.simplify_place_projection(place, location);
-                return self.new_pointer(*place, AddressKind::Address(mutbl));
+                return self.new_pointer(*place, AddressKind::Address(mutbl), None);
             }
             Rvalue::WrapUnsafeBinder(ref mut op, _) => {
                 let value = self.simplify_operand(op, location)?;

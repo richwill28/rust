@@ -129,7 +129,7 @@ impl<'tcx> Visitor<'tcx> for ConstMutationChecker<'_, 'tcx> {
     }
 
     fn visit_rvalue(&mut self, rvalue: &Rvalue<'tcx>, loc: Location) {
-        if let Rvalue::Ref(_, BorrowKind::Mut { .. }, place) = rvalue {
+        if let Rvalue::Ref(_, BorrowKind::Mut { .. }, place, _) = rvalue {
             let local = place.local;
             if let Some(def_id) = self.is_const_item(local) {
                 // If this Rvalue is being used as the right-hand side of a

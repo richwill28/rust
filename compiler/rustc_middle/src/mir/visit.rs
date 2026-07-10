@@ -715,7 +715,7 @@ macro_rules! make_mir_visitor {
 
                     Rvalue::ThreadLocalRef(_) => {}
 
-                    Rvalue::Ref(r, bk, path) => {
+                    Rvalue::Ref(r, bk, path, _view) => {
                         self.visit_region($(& $mutability)? *r, location);
                         let ctx = match bk {
                             BorrowKind::Shared => PlaceContext::NonMutatingUse(

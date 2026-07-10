@@ -240,7 +240,8 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
                 bug!("Unexpected unnameable type in variance computation: {ty}");
             }
 
-            ty::Ref(region, ty, mutbl) => {
+            ty::Ref(region, ty, mutbl, _view) => {
+                // View doesn't affect variance.
                 self.add_constraints_from_region(current, region, variance);
                 self.add_constraints_from_mt(current, &ty::TypeAndMut { ty, mutbl }, variance);
             }

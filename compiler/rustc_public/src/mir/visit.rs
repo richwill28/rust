@@ -268,7 +268,7 @@ macro_rules! make_mir_visitor {
                     Rvalue::CopyForDeref(place) | Rvalue::Discriminant(place) | Rvalue::Len(place) => {
                         self.visit_place(place, PlaceContext::NON_MUTATING, location);
                     }
-                    Rvalue::Ref(region, kind, place) => {
+                    Rvalue::Ref(region, kind, place, _view) => {
                         self.visit_region(region, location);
                         let pcx = PlaceContext { is_mut: matches!(kind, BorrowKind::Mut { .. }) };
                         self.visit_place(place, pcx, location);

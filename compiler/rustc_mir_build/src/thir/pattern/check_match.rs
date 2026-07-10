@@ -1295,7 +1295,7 @@ fn report_non_exhaustive_match<'p, 'tcx>(
         }
     }
 
-    if let ty::Ref(_, sub_ty, _) = scrut_ty.kind() {
+    if let ty::Ref(_, sub_ty, _, _) = scrut_ty.kind() {
         if !sub_ty.is_inhabited_from(cx.tcx, cx.module, cx.typing_env) {
             err.note("references are always considered inhabited");
         }

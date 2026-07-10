@@ -79,8 +79,17 @@ pub(super) fn check_fn<'a, 'tcx>(
             );
         }
 
-        // Check the pattern.
         let ty: Option<&hir::Ty<'_>> = inputs_hir.and_then(|h| h.get(idx));
+
+        // Check view type well-formedness for this parameter and collect view constraints.
+        if let Some(hir_ty) = ty {
+            if let Err(_guar) = fcx.check_view_ty_wf(hir_ty) {
+                // Error already reported
+            }
+            // Collect view constraint if this parameter has a view type.
+            fcx.collect_view_constraint_from_param(param, hir_ty);
+        }
+
         let ty_span = ty.map(|ty| ty.span);
         fcx.check_pat_top(param.pat, param_ty, ty_span, None, None);
         if param.pat.is_never_pattern() {
@@ -124,6 +133,21 @@ pub(super) fn check_fn<'a, 'tcx>(
             return_or_body_span,
             ObligationCauseCode::SizedReturnType,
         );
+    }
+
+    // Check view type well-formedness for the return type.
+    if let hir::FnRetTy::Return(ret_ty) = &decl.output {
+        if let Err(_guar) = fcx.check_view_ty_wf(ret_ty) {
+            // Error already reported
+        }
+        // TODO: Collect return type view constraint and verify that all return expressions
+        // (including implicit returns from body tail) satisfy the view constraint.
+        // This would require:
+        // 1. Extracting the view constraint from `ret_ty` if it has one (similar to parameter
+        //    constraint collection).
+        // 2. Storing it somewhere accessible during return expression checking.
+        // 3. Verifying each returned expression satisfies the constraint in
+        //    `check_return_or_body_tail`.
     }
 
     fcx.is_whole_body.set(true);

@@ -5,7 +5,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_macros::{HashStable, TyDecodable, TyEncodable, TypeFoldable, TypeVisitable};
 use rustc_span::Span;
 
-use crate::ty::{Ty, TyCtxt};
+use crate::ty::{Ty, TyCtxt, View};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, TyEncodable, TyDecodable, Hash, HashStable)]
 pub enum PointerCoercion {
@@ -80,7 +80,7 @@ pub enum PointerCoercion {
 ///    `Box<[i32]>` is an `Adjust::Unsize` with the target `Box<[i32]>`.
 #[derive(Clone, TyEncodable, TyDecodable, HashStable, TypeFoldable, TypeVisitable)]
 pub struct Adjustment<'tcx> {
-    pub kind: Adjust,
+    pub kind: Adjust<'tcx>,
     pub target: Ty<'tcx>,
 }
 
@@ -91,7 +91,7 @@ impl<'tcx> Adjustment<'tcx> {
 }
 
 #[derive(Clone, Debug, TyEncodable, TyDecodable, HashStable, TypeFoldable, TypeVisitable)]
-pub enum Adjust {
+pub enum Adjust<'tcx> {
     /// Go from ! to any type.
     NeverToAny,
 
@@ -99,7 +99,7 @@ pub enum Adjust {
     Deref(Option<OverloadedDeref>),
 
     /// Take the address and produce either a `&` or `*` pointer.
-    Borrow(AutoBorrow),
+    Borrow(AutoBorrow<'tcx>),
 
     Pointer(PointerCoercion),
 
@@ -183,9 +183,9 @@ impl From<AutoBorrowMutability> for hir::Mutability {
 
 #[derive(Copy, Clone, PartialEq, Debug, TyEncodable, TyDecodable, HashStable)]
 #[derive(TypeFoldable, TypeVisitable)]
-pub enum AutoBorrow {
-    /// Converts from T to &T.
-    Ref(AutoBorrowMutability),
+pub enum AutoBorrow<'tcx> {
+    /// Converts from T to &T (with optional view).
+    Ref(AutoBorrowMutability, Option<View<'tcx>>),
 
     /// Converts from T to *T.
     RawPtr(hir::Mutability),

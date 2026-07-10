@@ -256,7 +256,9 @@ impl<'p, 'tcx: 'p> RustcPatCtxt<'p, 'tcx> {
                 _ => bug!("Unexpected type for constructor `{ctor:?}`: {ty:?}"),
             },
             Ref => match ty.kind() {
-                ty::Ref(_, rty, _) => reveal_and_alloc(cx, once(*rty)),
+                // TODO: View is ignored because the semantics of pattern matching with views
+                // is not yet well-defined.
+                ty::Ref(_, rty, _, _view) => reveal_and_alloc(cx, once(*rty)),
                 _ => bug!("Unexpected type for `Ref` constructor: {ty:?}"),
             },
             Slice(slice) => match ty.builtin_index() {
@@ -585,7 +587,7 @@ impl<'p, 'tcx: 'p> RustcPatCtxt<'p, 'tcx> {
                         fields = vec![];
                         arity = 0;
                     }
-                    ty::Ref(_, t, _) if t.is_str() => {
+                    ty::Ref(_, t, _, _) if t.is_str() => {
                         // We want a `&str` constant to behave like a `Deref` pattern, to be compatible
                         // with other `Deref` patterns. This could have been done in `const_to_pat`,
                         // but that causes issues with the rest of the matching code.

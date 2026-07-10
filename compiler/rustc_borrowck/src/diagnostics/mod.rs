@@ -523,7 +523,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                     Some(variant.fields[field].name.to_string())
                 }
                 ty::Tuple(_) => Some(field.index().to_string()),
-                ty::Ref(_, ty, _) | ty::RawPtr(ty, _) => {
+                ty::Ref(_, ty, _, _) | ty::RawPtr(ty, _) => {
                     self.describe_field_from_ty(ty, field, variant_index, including_tuple_field)
                 }
                 ty::Array(ty, _) | ty::Slice(ty) => {
@@ -964,7 +964,12 @@ impl<'tcx> BorrowedContentSource<'tcx> {
             BorrowedContentSource::DerefRawPointer => "a `*const` pointer".to_string(),
             BorrowedContentSource::DerefSharedRef => "a `&` reference".to_string(),
             BorrowedContentSource::DerefMutableRef => {
-                bug!("describe_for_immutable_place: DerefMutableRef isn't immutable")
+                // With view types, a `&mut T` field can be restricted to shared
+                // access via a read-only view entry (e.g., `&mut {field} S`
+                // where `field: &mut T` is listed without `mut`). The field is
+                // behind a mutable reference, but the view makes it effectively
+                // immutable.
+                "a `&mut` reference (restricted to shared access by the view)".to_string()
             }
             BorrowedContentSource::OverloadedDeref(ty) => ty
                 .ty_adt_def()
@@ -1422,7 +1427,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                         // If the moved place was a `&mut` ref, then we can
                         // suggest to reborrow it where it was moved, so it
                         // will still be valid by the time we get to the usage.
-                        if let ty::Ref(_, _, hir::Mutability::Mut) =
+                        if let ty::Ref(_, _, hir::Mutability::Mut, _view) =
                             moved_place.ty(self.body, self.infcx.tcx).ty.kind()
                         {
                             // Suggest `reborrow` in other place for following situations:
@@ -1458,7 +1463,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
 
                         if let ty::Adt(def, args) = ty.peel_refs().kind()
                             && tcx.is_lang_item(def.did(), LangItem::Pin)
-                            && let ty::Ref(_, _, hir::Mutability::Mut) = args.type_at(0).kind()
+                            && let ty::Ref(_, _, hir::Mutability::Mut, _view) = args.type_at(0).kind()
                             && let self_ty = self.infcx.instantiate_binder_with_fresh_vars(
                                 fn_call_span,
                                 BoundRegionConversionTime::FnCall,

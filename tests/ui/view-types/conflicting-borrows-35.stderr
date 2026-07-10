@@ -1,0 +1,51 @@
+error[E0499]: cannot borrow `p.0` as mutable more than once at a time
+  --> $DIR/conflicting-borrows-35.rs:15:44
+   |
+LL |     let _ = conflicting_borrows_35(&mut p, &mut p);
+   |             ---------------------- ------  ^^^^^^ second mutable borrow occurs here
+   |             |                      |
+   |             |                      first mutable borrow occurs here
+   |             first borrow later used by call
+   |
+note: function `conflicting_borrows_35` has parameters with conflicting borrows
+  --> $DIR/conflicting-borrows-35.rs:5:56
+   |
+LL | fn conflicting_borrows_35(a: &mut {mut 0, mut 1} Pair, b: &mut {mut 0, mut 1} Pair) -> i32 {
+   |                           ---------------------------  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ borrows path `0` mutably
+   |                           |
+   |                           borrows path `0` mutably
+note: function `conflicting_borrows_35` has parameters with conflicting borrows
+  --> $DIR/conflicting-borrows-35.rs:5:56
+   |
+LL | fn conflicting_borrows_35(a: &mut {mut 0, mut 1} Pair, b: &mut {mut 0, mut 1} Pair) -> i32 {
+   |                           ---------------------------  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ borrows path `1` mutably
+   |                           |
+   |                           borrows path `1` mutably
+
+error[E0499]: cannot borrow `p.1` as mutable more than once at a time
+  --> $DIR/conflicting-borrows-35.rs:15:44
+   |
+LL |     let _ = conflicting_borrows_35(&mut p, &mut p);
+   |             ---------------------- ------  ^^^^^^ second mutable borrow occurs here
+   |             |                      |
+   |             |                      first mutable borrow occurs here
+   |             first borrow later used by call
+   |
+note: function `conflicting_borrows_35` has parameters with conflicting borrows
+  --> $DIR/conflicting-borrows-35.rs:5:56
+   |
+LL | fn conflicting_borrows_35(a: &mut {mut 0, mut 1} Pair, b: &mut {mut 0, mut 1} Pair) -> i32 {
+   |                           ---------------------------  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ borrows path `0` mutably
+   |                           |
+   |                           borrows path `0` mutably
+note: function `conflicting_borrows_35` has parameters with conflicting borrows
+  --> $DIR/conflicting-borrows-35.rs:5:56
+   |
+LL | fn conflicting_borrows_35(a: &mut {mut 0, mut 1} Pair, b: &mut {mut 0, mut 1} Pair) -> i32 {
+   |                           ---------------------------  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ borrows path `1` mutably
+   |                           |
+   |                           borrows path `1` mutably
+
+error: aborting due to 2 previous errors
+
+For more information about this error, try `rustc --explain E0499`.

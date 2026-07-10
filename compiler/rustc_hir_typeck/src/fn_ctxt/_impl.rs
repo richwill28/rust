@@ -147,14 +147,72 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             if prev.references_error() {
                 node_ty.insert(id, prev);
             } else if !ty.references_error() {
-                // Could change this to a bug, but there's lots of diagnostic code re-lowering
-                // or re-typechecking nodes that were already typecked.
-                // Lots of that diagnostics code relies on subtle effects of re-lowering, so we'll
-                // let it keep doing that and just ensure that compilation won't succeed.
-                self.dcx().span_delayed_bug(
-                    self.tcx.hir_span(id),
-                    format!("`{prev}` overridden by `{ty}` for {id:?} in {:?}", self.body_id),
-                );
+                // TODO: This needs review by rustc maintainers.
+
+                // Resolve both types to compare them accurately. Types may have inference
+                // variables that are resolved differently at different points in typechecking.
+                let resolved_prev = self.resolve_vars_if_possible(prev);
+                let resolved_ty = self.resolve_vars_if_possible(ty);
+
+                if resolved_prev != resolved_ty {
+                    // We're seeing multiple writes to the same HIR node with structurally different
+                    // types. This can happen during method confirmation when the same HIR node gets
+                    // type-checked multiple times. Each time we lower the node, fresh inference
+                    // variables are created. For example, the same expression might be assigned
+                    // &'?13 T on the first write and &'?14 T on the second write.
+                    //
+                    // These types are structurally different (different region inference variables),
+                    // but semantically equivalent. They both represent "a reference to T with an
+                    // inferred lifetime". We need to connect these inference variables so that when
+                    // one is resolved, the other is too.
+                    //
+                    // This primarily occurs during method confirmation in `instantiate_method_args`.
+                    // When generic arguments are lowered via `lower_generic_args`, the same HIR node
+                    // can be processed multiple times, each time creating fresh inference variables.
+                    //
+                    // To fix this, we unify the two types to connect their inference variables. This
+                    // ensures that when type inference resolves '?13, it will also resolve '?14
+                    // (and vice versa). Unification will succeed for semantically equivalent types
+                    // (same structure, different inference vars) and fail for genuinely incompatible
+                    // types (e.g. &i32 vs &str).
+
+                    // Drop borrows before unification (it may access type-checking state).
+                    drop(node_ty);
+                    drop(typeck);
+
+                    match self.at(&self.misc(self.tcx.hir_span(id)), self.param_env)
+                        .eq(DefineOpaqueTypes::Yes, resolved_prev, resolved_ty)
+                    {
+                        Ok(ok) => {
+                            // Unification succeeded. Types are compatible, register any obligations.
+                            self.register_infer_ok_obligations(ok);
+                            // Restore prev (the first write) as it may contain more specific type
+                            // information (e.g. views) that we want to preserve.
+                            self.typeck_results.borrow_mut().node_types_mut().insert(id, prev);
+                        }
+                        Err(_) => {
+                            // Unification failed, indicating genuinely incompatible types are being
+                            // written to the same HIR node (e.g. &i32 vs &str).
+                            //
+                            // Could use `bug` instead of `span_delayed_bug`, but there's lots of
+                            // diagnostic code that re-lowers or re-typechecks nodes that were already
+                            // typechecked, relying on subtle effects of re-lowering. So we use
+                            // `span_delayed_bug` to ensure compilation won't succeed while still
+                            // allowing diagnostics to continue.
+                            self.dcx().span_delayed_bug(
+                                self.tcx.hir_span(id),
+                                format!(
+                                    "type `{prev}` overridden with incompatible type `{ty}` for {id:?} in {:?} (unification failed)",
+                                    self.body_id
+                                ),
+                            );
+                        }
+                    }
+                } else {
+                    // Types are already equal after resolution. Restore prev to preserve any
+                    // specific type information (e.g., views) from the first write.
+                    node_ty.insert(id, prev);
+                }
             }
         }
 
@@ -296,7 +354,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             matches!(
                 adj,
                 &Adjustment {
-                    kind: Adjust::Borrow(AutoBorrow::Ref(AutoBorrowMutability::Mut { .. })),
+                    kind: Adjust::Borrow(AutoBorrow::Ref(AutoBorrowMutability::Mut { .. }, _)),
                     ..
                 }
             )

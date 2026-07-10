@@ -1265,10 +1265,15 @@ impl<'a> State<'a> {
                 self.word("*");
                 self.print_mt(mt, true);
             }
-            ast::TyKind::Ref(lifetime, mt) => {
+            ast::TyKind::Ref(lifetime, mt, view) => {
                 self.word("&");
                 self.print_opt_lifetime(lifetime);
-                self.print_mt(mt, false);
+                self.print_mutability(mt.mutbl, false);
+                if let Some(view) = view {
+                    self.print_view(view);
+                    self.space();
+                }
+                self.print_type(&mt.ty);
             }
             ast::TyKind::PinnedRef(lifetime, mt) => {
                 self.word("&");
@@ -1875,10 +1880,14 @@ impl<'a> State<'a> {
                 self.print_mutability(*m, false);
                 self.word("self")
             }
-            SelfKind::Region(lt, m) => {
+            SelfKind::Region(lt, m, view) => {
                 self.word("&");
                 self.print_opt_lifetime(lt);
                 self.print_mutability(*m, false);
+                if let Some(view) = view {
+                    self.print_view(view);
+                    self.space();
+                }
                 self.word("self")
             }
             SelfKind::Pinned(lt, m) => {
@@ -2169,6 +2178,23 @@ impl<'a> State<'a> {
             }
         }
         self.end(ib);
+    }
+
+    fn print_view(&mut self, view: &ast::View) {
+        self.word("{");
+        self.commasep(Inconsistent, &view.fields, |s, field| {
+            s.print_view_field(field);
+        });
+        self.word("}");
+    }
+
+    fn print_view_field(&mut self, field: &ast::ViewField) {
+        if field.mutbl.is_mut() {
+            self.word("mut ");
+        }
+        self.strsep(".", false, Inconsistent, &field.path, |s, segment| {
+            s.word(segment.to_string());
+        });
     }
 
     pub(crate) fn bounds_to_string(&self, bounds: &[ast::GenericBound]) -> String {

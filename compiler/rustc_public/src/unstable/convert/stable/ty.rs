@@ -415,10 +415,11 @@ impl<'tcx> Stable<'tcx> for ty::TyKind<'tcx> {
             ty::RawPtr(ty, mutbl) => {
                 TyKind::RigidTy(RigidTy::RawPtr(ty.stable(tables, cx), mutbl.stable(tables, cx)))
             }
-            ty::Ref(region, ty, mutbl) => TyKind::RigidTy(RigidTy::Ref(
+            ty::Ref(region, ty, mutbl, view) => TyKind::RigidTy(RigidTy::Ref(
                 region.stable(tables, cx),
                 ty.stable(tables, cx),
                 mutbl.stable(tables, cx),
+                view.map(|v| v.stable(tables, cx)),
             )),
             ty::FnDef(def_id, generic_args) => TyKind::RigidTy(RigidTy::FnDef(
                 tables.fn_def(*def_id),
@@ -1134,5 +1135,60 @@ impl<'tcx> Stable<'tcx> for rustc_middle::ty::util::Discr<'tcx> {
         cx: &CompilerCtxt<'cx, BridgeTys>,
     ) -> Self::T {
         crate::ty::Discr { val: self.val, ty: self.ty.stable(tables, cx) }
+    }
+}
+
+impl<'tcx> Stable<'tcx> for rustc_middle::ty::ViewField<'tcx> {
+    type T = crate::ty::ViewField;
+
+    fn stable<'cx>(
+        &self,
+        _tables: &mut Tables<'cx, BridgeTys>,
+        _cx: &CompilerCtxt<'cx, BridgeTys>,
+    ) -> Self::T {
+        crate::ty::ViewField {
+            path: self.path.iter().map(|s| s.to_string()).collect(),
+            mutbl: self.mutbl.stable(_tables, _cx),
+        }
+    }
+}
+
+impl<'tcx> Stable<'tcx> for rustc_middle::ty::View<'tcx> {
+    type T = crate::ty::View;
+
+    fn stable<'cx>(
+        &self,
+        tables: &mut Tables<'cx, BridgeTys>,
+        cx: &CompilerCtxt<'cx, BridgeTys>,
+    ) -> Self::T {
+        self.iter().map(|field| field.stable(tables, cx)).collect()
+    }
+}
+
+impl<'tcx> Stable<'tcx> for rustc_middle::mir::ViewField<'tcx> {
+    type T = crate::ty::ViewField;
+
+    fn stable<'cx>(
+        &self,
+        _tables: &mut Tables<'cx, BridgeTys>,
+        _cx: &CompilerCtxt<'cx, BridgeTys>,
+    ) -> Self::T {
+        crate::ty::ViewField {
+            path: self.path.iter().map(|s| s.to_string()).collect(),
+            // Convert BorrowKind to Mutability (lossy conversion)
+            mutbl: self.kind.to_mutbl_lossy().stable(_tables, _cx),
+        }
+    }
+}
+
+impl<'tcx> Stable<'tcx> for rustc_middle::mir::View<'tcx> {
+    type T = crate::ty::View;
+
+    fn stable<'cx>(
+        &self,
+        tables: &mut Tables<'cx, BridgeTys>,
+        cx: &CompilerCtxt<'cx, BridgeTys>,
+    ) -> Self::T {
+        self.iter().map(|field| field.stable(tables, cx)).collect()
     }
 }

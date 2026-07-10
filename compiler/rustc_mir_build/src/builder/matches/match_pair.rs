@@ -321,7 +321,7 @@ impl<'tcx> MatchPairTree<'tcx> {
                 // Create a new temporary for each deref pattern.
                 // FIXME(deref_patterns): dedup temporaries to avoid multiple `deref()` calls?
                 let temp = cx.temp(
-                    Ty::new_ref(cx.tcx, cx.tcx.lifetimes.re_erased, subpattern.ty, mutability),
+                    Ty::new_ref(cx.tcx, cx.tcx.lifetimes.re_erased, subpattern.ty, mutability, None),
                     pattern.span,
                 );
                 MatchPairTree::for_pattern(

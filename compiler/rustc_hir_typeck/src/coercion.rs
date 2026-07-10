@@ -53,7 +53,10 @@ use rustc_middle::ty::adjustment::{
     Adjust, Adjustment, AllowTwoPhase, AutoBorrow, AutoBorrowMutability, PointerCoercion,
 };
 use rustc_middle::ty::error::TypeError;
-use rustc_middle::ty::{self, GenericArgsRef, Ty, TyCtxt, TypeVisitableExt};
+use rustc_middle::ty::{
+    self, GenericArgsRef, Ty, TyCtxt, TypeVisitableExt, View, get_maximal_view,
+    is_view_more_permissive,
+};
 use rustc_span::{BytePos, DUMMY_SP, DesugaringKind, Span};
 use rustc_trait_selection::infer::InferCtxtExt as _;
 use rustc_trait_selection::solve::inspect::{self, InferCtxtProofTreeExt, ProofTreeVisitor};
@@ -102,6 +105,56 @@ fn coerce_mutbls<'tcx>(
     to_mutbl: hir::Mutability,
 ) -> RelateResult<'tcx, ()> {
     if from_mutbl >= to_mutbl { Ok(()) } else { Err(TypeError::Mutability) }
+}
+
+/// Check if a view reference can be coerced to another view reference.
+///
+/// View coercion follows these rules:
+/// - Case 1 (None -> None): Both references have no view, standard reference coercion applies.
+/// - Case 2 (Some -> None): Coercing from a view reference to a normal reference requires that
+///   the source view is at least as permissive as what a normal reference would provide (access
+///   to all top-level fields with appropriate mutability).
+/// - Case 3 (None -> Some): Coercing from a normal reference to a view reference is always allowed,
+///   since a normal reference is maximally permissive.
+/// - Case 4 (Some -> Some): Coercing between two view references requires that the source view
+///   is more permissive than the target view (can access all fields the target can, with
+///   compatible mutability).
+fn coerce_views<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    from_view: Option<View<'tcx>>,
+    to_ty: Ty<'tcx>,
+    to_mutbl: hir::Mutability,
+    to_view: Option<View<'tcx>>,
+) -> RelateResult<'tcx, ()> {
+    match (from_view, to_view) {
+        // Case 1: Both views are None, i.e. normal reference coercion.
+        (None, None) => Ok(()),
+
+        // Case 2: Coercing view reference to normal reference.
+        (Some(from_fields), None) => {
+            let maximal_view = get_maximal_view(tcx, to_ty, to_mutbl);
+            if is_view_more_permissive(from_fields, maximal_view) {
+                Ok(())
+            } else {
+                // TODO: We return a mismatch error for now, it would
+                // be nice to have a dedicated error involving views.
+                Err(TypeError::Mismatch)
+            }
+        }
+
+        // Case 3: Coercing normal reference to view reference, always OK.
+        (None, Some(_)) => Ok(()),
+
+        // Case 4: Both have views, check that from_view is more permissive.
+        (Some(from_fields), Some(to_fields)) => {
+            if is_view_more_permissive(from_fields, to_fields) {
+                Ok(())
+            } else {
+                // TODO: Ditto.
+                Err(TypeError::Mismatch)
+            }
+        }
+    }
 }
 
 /// This always returns `Ok(...)`.
@@ -165,7 +218,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         a: Ty<'tcx>,
         b: Ty<'tcx>,
         adjustments: impl IntoIterator<Item = Adjustment<'tcx>>,
-        final_adjustment: Adjust,
+        final_adjustment: Adjust<'tcx>,
     ) -> CoerceResult<'tcx> {
         self.unify_raw(a, b).and_then(|InferOk { value: ty, obligations }| {
             success(
@@ -230,8 +283,8 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             ty::RawPtr(_, b_mutbl) => {
                 return self.coerce_raw_ptr(a, b, b_mutbl);
             }
-            ty::Ref(r_b, _, mutbl_b) => {
-                return self.coerce_borrowed_pointer(a, b, r_b, mutbl_b);
+            ty::Ref(r_b, _, mutbl_b, view_b) => {
+                return self.coerce_borrowed_pointer(a, b, r_b, mutbl_b, view_b);
             }
             ty::Adt(pin, _)
                 if self.tcx.features().pin_ergonomics()
@@ -320,6 +373,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         b: Ty<'tcx>,
         r_b: ty::Region<'tcx>,
         mutbl_b: hir::Mutability,
+        view_b: Option<View<'tcx>>,
     ) -> CoerceResult<'tcx> {
         debug!("coerce_borrowed_pointer(a={:?}, b={:?})", a, b);
         debug_assert!(self.shallow_resolve(a) == a);
@@ -331,16 +385,23 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         // to type check, we will construct the type that `&M*expr` would
         // yield.
 
-        let (r_a, mt_a) = match *a.kind() {
-            ty::Ref(r_a, ty, mutbl) => {
+        let span = self.cause.span;
+
+        // Extract components from `b`. This function is only called when the match in `coerce()`
+        // identifies `b` as `ty::Ref`, so this should always succeed.
+        let ty::Ref(_, ty_b, _, _) = *b.kind() else {
+            span_bug!(span, "expected a ref, got {:?}", b);
+        };
+
+        let (r_a, mt_a, view_a) = match *a.kind() {
+            ty::Ref(r_a, ty, mutbl, view_a) => {
                 let mt_a = ty::TypeAndMut { ty, mutbl };
                 coerce_mutbls(mt_a.mutbl, mutbl_b)?;
-                (r_a, mt_a)
+                coerce_views(self.tcx, view_a, ty_b, mutbl_b, view_b)?;
+                (r_a, mt_a, view_a)
             }
             _ => return self.unify(a, b),
         };
-
-        let span = self.cause.span;
 
         let mut first_error = None;
         let mut r_borrow_var = None;
@@ -442,6 +503,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                 r,
                 referent_ty,
                 mutbl_b, // [1] above
+                view_b,
             );
             match self.unify_raw(derefd_ty_a, b) {
                 Ok(ok) => {
@@ -475,7 +537,28 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             }
         };
 
-        if ty == a && mt_a.mutbl.is_not() && autoderef.step_count() == 1 {
+        // Extract the view from the unified type to compare with the source.
+        // This also verifies that ty is a reference type.
+        let ty::Ref(_, _, _, ty_view) = *ty.kind() else {
+            span_bug!(span, "expected a ref type, got {:?}", ty);
+        };
+
+        // Check if views are "equivalent".
+        // Two views are "equivalent" if each is more permissive than the other.
+        // IMPORTANT: The notion of equivalence here is not exactly semantic equivalence.
+        // For instance, a normal reference (&T) is semantically equivalent to a view
+        // reference with all top-level fields present in the view (&{all_fields} T).
+        // Here, however, we consider these two references as not "equivalent" to trigger
+        // an explicit reborrow that applies the view restriction (even when the presence
+        // of the view doesn't change the set of accessible fields).
+        let views_equivalent = match (view_a, ty_view) {
+            (None, None) => true,
+            (Some(source), Some(target)) =>
+                is_view_more_permissive(source, target) && is_view_more_permissive(target, source),
+            _ => false,
+        };
+
+        if ty == a && mt_a.mutbl.is_not() && views_equivalent && autoderef.step_count() == 1 {
             // As a special case, if we would produce `&'a *x`, that's
             // a total no-op. We end up with the type `&'a T` just as
             // we started with. In that case, just skip it
@@ -487,6 +570,10 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             // `self.x` both have `&mut `type would be a move of
             // `self.x`, but we auto-coerce it to `foo(&mut *self.x)`,
             // which is a borrow.
+            //
+            // Note that similarly, if the views differ, e.g. `&T` to
+            // `&{field} T`, we DO need to reborrow to correctly apply
+            // the view restriction.
             assert!(mutbl_b.is_not()); // can only coerce &T -> &U
             return success(vec![], ty, obligations);
         }
@@ -496,13 +583,8 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         obligations.extend(o);
         obligations.extend(autoderef.into_obligations());
 
-        // Now apply the autoref. We have to extract the region out of
-        // the final ref type we got.
-        let ty::Ref(..) = ty.kind() else {
-            span_bug!(span, "expected a ref type, got {:?}", ty);
-        };
         let mutbl = AutoBorrowMutability::new(mutbl_b, self.allow_two_phase);
-        adjustments.push(Adjustment { kind: Adjust::Borrow(AutoBorrow::Ref(mutbl)), target: ty });
+        adjustments.push(Adjustment { kind: Adjust::Borrow(AutoBorrow::Ref(mutbl, ty_view)), target: ty });
 
         debug!("coerce_borrowed_pointer: succeeded ty={:?} adjustments={:?}", ty, adjustments);
 
@@ -572,9 +654,9 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         // Additionally, we ignore `&str -> &str` coercions, which happen very
         // commonly since strings are one of the most used argument types in Rust,
         // we do coercions when type checking call expressions.
-        if let ty::Ref(_, source_pointee, ty::Mutability::Not) = *source.kind()
+        if let ty::Ref(_, source_pointee, ty::Mutability::Not, _) = *source.kind()
             && source_pointee.is_str()
-            && let ty::Ref(_, target_pointee, ty::Mutability::Not) = *target.kind()
+            && let ty::Ref(_, target_pointee, ty::Mutability::Not, _) = *target.kind()
             && target_pointee.is_str()
         {
             return Err(TypeError::Mismatch);
@@ -594,7 +676,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
 
         // Handle reborrows before selecting `Source: CoerceUnsized<Target>`.
         let reborrow = match (source.kind(), target.kind()) {
-            (&ty::Ref(_, ty_a, mutbl_a), &ty::Ref(_, _, mutbl_b)) => {
+            (&ty::Ref(_, ty_a, mutbl_a, _), &ty::Ref(_, _, mutbl_b, _)) => {
                 coerce_mutbls(mutbl_a, mutbl_b)?;
 
                 let coercion = RegionVariableOrigin::Coercion(self.cause.span);
@@ -608,12 +690,12 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                 Some((
                     Adjustment { kind: Adjust::Deref(None), target: ty_a },
                     Adjustment {
-                        kind: Adjust::Borrow(AutoBorrow::Ref(mutbl)),
-                        target: Ty::new_ref(self.tcx, r_borrow, ty_a, mutbl_b),
+                        kind: Adjust::Borrow(AutoBorrow::Ref(mutbl, None)),
+                        target: Ty::new_ref(self.tcx, r_borrow, ty_a, mutbl_b, None),
                     },
                 ))
             }
-            (&ty::Ref(_, ty_a, mt_a), &ty::RawPtr(_, mt_b)) => {
+            (&ty::Ref(_, ty_a, mt_a, _), &ty::RawPtr(_, mt_b)) => {
                 coerce_mutbls(mt_a, mt_b)?;
 
                 Some((
@@ -831,7 +913,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             };
             // Make sure the T is something we understand (just `&mut U` for now)
             match ty.kind() {
-                ty::Ref(region, ty, mutbl) => Ok((pin, *region, *ty, *mutbl)),
+                ty::Ref(region, ty, mutbl, _) => Ok((pin, *region, *ty, *mutbl)),
                 _ => {
                     debug!("can't reborrow pin of inner type {:?}", ty);
                     Err(TypeError::Mismatch)
@@ -848,7 +930,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         let a = Ty::new_adt(
             self.tcx,
             pin,
-            self.tcx.mk_args(&[Ty::new_ref(self.tcx, a_region, a_ty, mut_b).into()]),
+            self.tcx.mk_args(&[Ty::new_ref(self.tcx, a_region, a_ty, mut_b, None).into()]),
         );
 
         // To complete the reborrow, we need to make sure we can unify the inner types, and if so we
@@ -860,7 +942,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         &self,
         fn_ty_a: ty::PolyFnSig<'tcx>,
         b: Ty<'tcx>,
-        adjustment: Option<Adjust>,
+        adjustment: Option<Adjust<'tcx>>,
     ) -> CoerceResult<'tcx> {
         debug_assert!(self.shallow_resolve(b) == b);
 
@@ -1024,7 +1106,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         debug_assert!(self.shallow_resolve(b) == b);
 
         let (is_ref, mt_a) = match *a.kind() {
-            ty::Ref(_, ty, mutbl) => (true, ty::TypeAndMut { ty, mutbl }),
+            ty::Ref(_, ty, mutbl, _) => (true, ty::TypeAndMut { ty, mutbl }),
             ty::RawPtr(ty, mutbl) => (false, ty::TypeAndMut { ty, mutbl }),
             _ => return self.unify(a, b),
         };

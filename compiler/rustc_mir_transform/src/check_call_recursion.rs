@@ -52,7 +52,7 @@ impl<'tcx> MirLint<'tcx> for CheckDropRecursion {
         {
             // It was. Now figure out for what type `Drop` is implemented and then
             // check for recursion.
-            if let ty::Ref(_, dropped_ty, _) =
+            if let ty::Ref(_, dropped_ty, _, _) =
                 tcx.liberate_late_bound_regions(def_id.to_def_id(), sig.input(0)).kind()
             {
                 check_recursion(tcx, body, RecursiveDrop { drop_for: *dropped_ty });

@@ -583,7 +583,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                 }
             }
 
-            Rvalue::Ref(_, BorrowKind::Mut { .. }, place)
+            Rvalue::Ref(_, BorrowKind::Mut { .. }, place, _)
             | Rvalue::RawPtr(RawPtrKind::Mut, place) => {
                 // Inside mutable statics, we allow arbitrary mutable references.
                 // We've allowed `static mut FOO = &mut [elements];` for a long time (the exact
@@ -597,7 +597,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                 }
             }
 
-            Rvalue::Ref(_, BorrowKind::Shared | BorrowKind::Fake(_), place)
+            Rvalue::Ref(_, BorrowKind::Shared | BorrowKind::Fake(_), place, _)
             | Rvalue::RawPtr(RawPtrKind::Const, place) => {
                 let borrowed_place_has_mut_interior = qualifs::in_place::<HasMutInterior, _>(
                     self.ccx,
@@ -825,7 +825,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                 // const-eval of the `begin_panic` fn assumes the argument is `&str`
                 if tcx.is_lang_item(callee, LangItem::BeginPanic) {
                     match args[0].node.ty(&self.ccx.body.local_decls, tcx).kind() {
-                        ty::Ref(_, ty, _) if ty.is_str() => {}
+                        ty::Ref(_, ty, _, _) if ty.is_str() => {}
                         _ => self.check_op(ops::PanicNonStr),
                     }
                     // Allow this call, skip all the checks below.
@@ -835,7 +835,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                 // const-eval of `panic_display` assumes the argument is `&&str`
                 if tcx.is_lang_item(callee, LangItem::PanicDisplay) {
                     match args[0].node.ty(&self.ccx.body.local_decls, tcx).kind() {
-                        ty::Ref(_, ty, _) if matches!(ty.kind(), ty::Ref(_, ty, _) if ty.is_str()) =>
+                        ty::Ref(_, ty, _, _) if matches!(ty.kind(), ty::Ref(_, ty, _, _) if ty.is_str()) =>
                             {}
                         _ => {
                             self.check_op(ops::PanicNonStr);

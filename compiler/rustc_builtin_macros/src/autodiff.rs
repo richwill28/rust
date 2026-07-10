@@ -486,7 +486,7 @@ mod llvm_enzyme {
             TyKind::Ptr(ref mut mut_ty) => {
                 mut_ty.mutbl = ast::Mutability::Mut;
             }
-            TyKind::Ref(_, ref mut mut_ty) => {
+            TyKind::Ref(_, ref mut mut_ty, _) => {
                 mut_ty.mutbl = ast::Mutability::Mut;
             }
             _ => {

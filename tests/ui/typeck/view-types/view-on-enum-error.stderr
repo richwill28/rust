@@ -1,0 +1,11 @@
+error: only reference types to structs can be enriched with a view
+  --> $DIR/view-on-enum-error.rs:9:20
+   |
+LL | fn view_on_enum(c: &{Red} Color) {
+   |                    ^^^^^^^^^^^^ view not allowed here
+   |
+   = note: views cannot be applied to enums
+   = help: consider applying the view to individual enum variant fields instead
+
+error: aborting due to 1 previous error
+

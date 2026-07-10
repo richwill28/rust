@@ -506,9 +506,10 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             // that, similar to what `FnCtxt::suggest_deref_or_ref` does.
             let (is_under_ref, base_ty, span) = match expr.kind {
                 hir::ExprKind::AddrOf(hir::BorrowKind::Ref, hir::Mutability::Not, subexpr)
-                    if let &ty::Ref(region, base_ty, hir::Mutability::Not) = real_ty.kind() =>
+                    if let &ty::Ref(region, base_ty, hir::Mutability::Not, view) = real_ty.kind()
+                    && view.is_none() => // Only suggest for normal references without views.
                 {
-                    (Some(region), base_ty, subexpr.span)
+                    (Some((region, view)), base_ty, subexpr.span)
                 }
                 // Don't suggest `*&mut`, etc.
                 hir::ExprKind::AddrOf(..) => return false,
@@ -527,8 +528,8 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 is_boxed &= ty.is_box();
 
                 // Re-add the `&` if necessary
-                if let Some(region) = is_under_ref {
-                    ty = Ty::new_ref(self.tcx, region, ty, hir::Mutability::Not);
+                if let Some((region, view)) = is_under_ref {
+                    ty = Ty::new_ref(self.tcx, region, ty, hir::Mutability::Not, view);
                 }
 
                 // Remapping bound vars here
@@ -977,7 +978,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             let Some(generics) = self.tcx.hir_get_generics(obligation.cause.body_id) else {
                 return false;
             };
-            let ty::Ref(_, inner_ty, hir::Mutability::Not) = ty.kind() else { return false };
+            let ty::Ref(_, inner_ty, hir::Mutability::Not, _) = ty.kind() else { return false };
             let ty::Param(param) = inner_ty.kind() else { return false };
             let ObligationCauseCode::FunctionArg { arg_hir_id, .. } = obligation.cause.code()
             else {
@@ -1352,7 +1353,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
 
             let (ref_inner_ty_satisfies_pred, ref_inner_ty_is_mut) =
                 if let ObligationCauseCode::WhereClauseInExpr(..) = obligation.cause.code()
-                    && let ty::Ref(_, ty, mutability) = old_pred.self_ty().skip_binder().kind()
+                    && let ty::Ref(_, ty, mutability, _) = old_pred.self_ty().skip_binder().kind()
                 {
                     (
                         mk_result(old_pred.map_bound(|trait_pred| (trait_pred, *ty))),
@@ -1517,7 +1518,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         self_ty: Ty<'tcx>,
         target_ty: Ty<'tcx>,
     ) {
-        let ty::Ref(_, object_ty, hir::Mutability::Not) = target_ty.kind() else {
+        let ty::Ref(_, object_ty, hir::Mutability::Not, None) = target_ty.kind() else {
             return;
         };
         let ty::Dynamic(predicates, _) = object_ty.kind() else {
@@ -1604,12 +1605,12 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         // Skipping binder here, remapping below
         let mut suggested_ty = trait_pred.self_ty().skip_binder();
         if let Some(mut hir_ty) = expr_finder.ty_result {
-            while let hir::TyKind::Ref(_, mut_ty) = &hir_ty.kind {
+            while let hir::TyKind::Ref(_, mut_ty, _) = &hir_ty.kind {
                 count += 1;
                 let span = hir_ty.span.until(mut_ty.ty.span);
                 suggestions.push((span, String::new()));
 
-                let ty::Ref(_, inner_ty, _) = suggested_ty.kind() else {
+                let ty::Ref(_, inner_ty, _, _) = suggested_ty.kind() else {
                     break;
                 };
                 suggested_ty = *inner_ty;
@@ -1649,7 +1650,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
 
                 suggestions.push((span, String::new()));
 
-                let ty::Ref(_, inner_ty, _) = suggested_ty.kind() else {
+                let ty::Ref(_, inner_ty, _, _) = suggested_ty.kind() else {
                     break 'outer;
                 };
                 suggested_ty = *inner_ty;
@@ -1769,7 +1770,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             }
 
             // Skipping binder here, remapping below
-            if let ty::Ref(region, t_type, mutability) = *trait_pred.skip_binder().self_ty().kind()
+            if let ty::Ref(region, t_type, mutability, _) = *trait_pred.skip_binder().self_ty().kind()
             {
                 let suggested_ty = match mutability {
                     hir::Mutability::Mut => Ty::new_imm_ref(self.tcx, region, t_type),
@@ -2726,7 +2727,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             CoroutineInteriorOrUpvar::Upvar(upvar_span) => {
                 // `Some((ref_ty, is_mut))` if `target_ty` is `&T` or `&mut T` and fails to impl `Send`
                 let non_send = match target_ty.kind() {
-                    ty::Ref(_, ref_ty, mutability) => match self.evaluate_obligation(obligation) {
+                    ty::Ref(_, ref_ty, mutability, _) => match self.evaluate_obligation(obligation) {
                         Ok(eval) if !eval.may_apply() => Some((ref_ty, mutability.is_mut())),
                         _ => None,
                     },
@@ -3987,7 +3988,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 .tcx
                 .is_diagnostic_item(sym::SliceIndex, trait_pred.skip_binder().trait_ref.def_id)
             && let ty::Slice(_) = trait_pred.skip_binder().trait_ref.args.type_at(1).kind()
-            && let ty::Ref(_, inner_ty, _) = trait_pred.skip_binder().self_ty().kind()
+            && let ty::Ref(_, inner_ty, _, None) = trait_pred.skip_binder().self_ty().kind()
             && let ty::Uint(ty::UintTy::Usize) = inner_ty.kind()
         {
             err.span_suggestion_verbose(
@@ -4227,7 +4228,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             } = fn_ty.fn_sig(tcx).skip_binder()
 
             // Extract first param of fn sig with peeled refs, e.g. `fn(&T)` -> `T`
-            && let Some(&ty::Ref(_, target_ty, needs_mut)) = fn_sig.inputs().first().map(|t| t.kind())
+            && let Some(&ty::Ref(_, target_ty, needs_mut, None)) = fn_sig.inputs().first().map(|t| t.kind())
             && !target_ty.has_escaping_bound_vars()
 
             // Extract first tuple element out of fn trait, e.g. `FnOnce<(U,)>` -> `U`
@@ -4328,7 +4329,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                         && let Some(expr_ty) = typeck_results.expr_ty_opt(expr)
                         && let Some(rcvr_ty) = typeck_results.expr_ty_opt(rcvr)
                         && self.can_eq(param_env, expr_ty, rcvr_ty)
-                        && let ty::Ref(_, ty, _) = expr_ty.kind()
+                        && let ty::Ref(_, ty, _, _) = expr_ty.kind()
                     {
                         err.span_label(
                             span,
@@ -4632,7 +4633,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         let (element_ty, mut mutability) = match *trait_pred.skip_binder().self_ty().kind() {
             ty::Array(element_ty, _) => (element_ty, None),
 
-            ty::Ref(_, pointee_ty, mutability) => match *pointee_ty.kind() {
+            ty::Ref(_, pointee_ty, mutability, None) => match *pointee_ty.kind() {
                 ty::Array(element_ty, _) => (element_ty, Some(mutability)),
                 _ => return,
             },
@@ -4643,7 +4644,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         // Go through all the candidate impls to see if any of them is for
         // slices of `element_ty` with `mutability`.
         let mut is_slice = |candidate: Ty<'tcx>| match *candidate.kind() {
-            ty::RawPtr(t, m) | ty::Ref(_, t, m) => {
+            ty::RawPtr(t, m) | ty::Ref(_, t, m, None) => {
                 if matches!(*t.kind(), ty::Slice(e) if e == element_ty)
                     && m == mutability.unwrap_or(m)
                 {
@@ -4903,7 +4904,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 format!("Ok({})", self.ty_kind_suggestion(param_env, args[0].expect_ty())?)
             }
             ty::Adt(_, _) if implements_default(ty) => "Default::default()".to_string(),
-            ty::Ref(_, ty, mutability) => {
+            ty::Ref(_, ty, mutability, _) => {
                 if let (ty::Str, hir::Mutability::Not) = (ty.kind(), mutability) {
                     "\"\"".to_string()
                 } else {
@@ -5238,7 +5239,7 @@ fn hint_missing_borrow<'tcx>(
                 let mut span = arg.span.shrink_to_lo();
                 let mut left = found_refs.len() - expected_refs.len();
                 let mut ty = arg;
-                while let hir::TyKind::Ref(_, mut_ty) = &ty.kind
+                while let hir::TyKind::Ref(_, mut_ty, _) = &ty.kind
                     && left > 0
                 {
                     span = span.with_hi(mut_ty.ty.span.lo());
@@ -5668,7 +5669,7 @@ fn point_at_assoc_type_restriction<G: EmissionGuarantee>(
 fn get_deref_type_and_refs(mut ty: Ty<'_>) -> (Ty<'_>, Vec<hir::Mutability>) {
     let mut refs = vec![];
 
-    while let ty::Ref(_, new_ty, mutbl) = ty.kind() {
+    while let ty::Ref(_, new_ty, mutbl, _) = ty.kind() {
         ty = *new_ty;
         refs.push(*mutbl);
     }

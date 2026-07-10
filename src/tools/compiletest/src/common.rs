@@ -126,6 +126,8 @@ pub enum FailMode {
 string_enum! {
     #[derive(Clone, Debug, PartialEq)]
     pub enum CompareMode {
+        Aeneas => "aeneas",
+        AeneasVsPolonius => "aeneas-vs-polonius",
         Polonius => "polonius",
         NextSolver => "next-solver",
         NextSolverCoherence => "next-solver-coherence",

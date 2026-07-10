@@ -1,0 +1,22 @@
+error: view contains overlapping field paths
+  --> $DIR/duplicate-fields-error.rs:8:23
+   |
+LL | fn duplicate_field(p: &{x, x} Point) {
+   |                       ^^^^^^^^^^^^^ overlapping fields in view
+   |
+   = note: field `x` appears multiple times in the view
+   = help: remove the duplicate field from the view
+   = note: all fields in a view must be disjoint (no field can be a prefix of another)
+
+error: view contains overlapping field paths
+  --> $DIR/duplicate-fields-error.rs:12:28
+   |
+LL | fn duplicate_among_many(p: &{x, y, x} Point) {
+   |                            ^^^^^^^^^^^^^^^^ overlapping fields in view
+   |
+   = note: field `x` appears multiple times in the view
+   = help: remove the duplicate field from the view
+   = note: all fields in a view must be disjoint (no field can be a prefix of another)
+
+error: aborting due to 2 previous errors
+

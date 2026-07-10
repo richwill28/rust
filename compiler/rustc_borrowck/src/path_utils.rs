@@ -41,6 +41,7 @@ pub(super) fn each_borrow_involving_path<'tcx, F, I, S>(
             body,
             borrowed.borrowed_place,
             borrowed.kind,
+            borrowed.view,
             place.as_ref(),
             access,
             places_conflict::PlaceConflictBias::Overlap,

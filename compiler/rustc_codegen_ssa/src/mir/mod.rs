@@ -349,7 +349,7 @@ fn optimize_use_clone<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
             // doing DefId lookups to figure out what we're actually calling.
             let arg_ty = arg.node.ty(&mir.local_decls, tcx);
 
-            let ty::Ref(_region, inner_ty, mir::Mutability::Not) = *arg_ty.kind() else { continue };
+            let ty::Ref(_region, inner_ty, mir::Mutability::Not, _) = *arg_ty.kind() else { continue };
 
             if !tcx.type_is_copy_modulo_regions(cx.typing_env(), inner_ty) {
                 continue;

@@ -6,7 +6,7 @@ use crate::compiler_interface::with;
 use crate::mir::pretty::function_body;
 use crate::ty::{
     AdtDef, ClosureDef, CoroutineClosureDef, CoroutineDef, GenericArgs, MirConst, Movability,
-    Region, RigidTy, Ty, TyConst, TyKind, VariantIdx,
+    Region, RigidTy, Ty, TyConst, TyKind, VariantIdx, View,
 };
 use crate::{Error, Opaque, Span, Symbol};
 
@@ -555,7 +555,7 @@ pub enum Rvalue {
     Len(Place),
 
     /// Creates a reference to the place.
-    Ref(Region, BorrowKind, Place),
+    Ref(Region, BorrowKind, Place, Option<View>),
 
     /// Creates an array where each element is the value of the operand.
     ///
@@ -609,9 +609,9 @@ impl Rvalue {
                 Ok(Ty::new_array_with_const_len(operand.ty(locals)?, count.clone()))
             }
             Rvalue::ThreadLocalRef(did) => Ok(did.ty()),
-            Rvalue::Ref(reg, bk, place) => {
+            Rvalue::Ref(reg, bk, place, view) => {
                 let place_ty = place.ty(locals)?;
-                Ok(Ty::new_ref(reg.clone(), place_ty, bk.to_mutable_lossy()))
+                Ok(Ty::new_ref(reg.clone(), place_ty, bk.to_mutable_lossy(), view.clone()))
             }
             Rvalue::AddressOf(mutability, place) => {
                 let place_ty = place.ty(locals)?;

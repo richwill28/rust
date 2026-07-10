@@ -339,7 +339,7 @@ fn evaluate_host_effect_for_copy_clone_goal<'tcx>(
         | ty::Char
         | ty::RawPtr(..)
         | ty::Never
-        | ty::Ref(_, _, ty::Mutability::Not)
+        | ty::Ref(_, _, ty::Mutability::Not, _)
         | ty::Array(..) => Err(EvaluationFailure::NoSolution),
 
         // Cannot implement in core, as we can't be generic over patterns yet,
@@ -350,7 +350,7 @@ fn evaluate_host_effect_for_copy_clone_goal<'tcx>(
         | ty::Str
         | ty::Slice(_)
         | ty::Foreign(..)
-        | ty::Ref(_, _, ty::Mutability::Mut)
+        | ty::Ref(_, _, ty::Mutability::Mut, _)
         | ty::Adt(_, _)
         | ty::Alias(_, _)
         | ty::Param(_)

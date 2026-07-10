@@ -404,9 +404,10 @@ impl<'a, 'tcx> ThirPrinter<'a, 'tcx> {
                 print_indented!(self, format!("var_hir_id: {:?}", var_hir_id), depth_lvl + 1);
                 print_indented!(self, "}", depth_lvl);
             }
-            Borrow { borrow_kind, arg } => {
+            Borrow { borrow_kind, arg, view } => {
                 print_indented!(self, "Borrow (", depth_lvl);
                 print_indented!(self, format!("borrow_kind: {:?}", borrow_kind), depth_lvl + 1);
+                print_indented!(self, format!("view: {:?}", view), depth_lvl + 1);
                 print_indented!(self, "arg:", depth_lvl + 1);
                 self.print_expr(*arg, depth_lvl + 2);
                 print_indented!(self, ")", depth_lvl);

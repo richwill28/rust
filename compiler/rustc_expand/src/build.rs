@@ -119,7 +119,9 @@ impl<'a> ExtCtxt<'a> {
         lifetime: Option<ast::Lifetime>,
         mutbl: ast::Mutability,
     ) -> Box<ast::Ty> {
-        self.ty(span, ast::TyKind::Ref(lifetime, self.ty_mt(ty, mutbl)))
+        // TODO: Consider adding view type support for programmatic generation
+        // of reference types with view syntax like `&{field1, field2} T`.
+        self.ty(span, ast::TyKind::Ref(lifetime, self.ty_mt(ty, mutbl), None))
     }
 
     pub fn ty_ptr(&self, span: Span, ty: Box<ast::Ty>, mutbl: ast::Mutability) -> Box<ast::Ty> {

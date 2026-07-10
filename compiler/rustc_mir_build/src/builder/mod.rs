@@ -951,7 +951,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
         let mut closure_ty = closure_arg.ty;
         let mut closure_env_projs = vec![];
-        if let ty::Ref(_, ty, _) = closure_ty.kind() {
+        if let ty::Ref(_, ty, _, _) = closure_ty.kind() {
             closure_env_projs.push(ProjectionElem::Deref);
             closure_ty = *ty;
         }

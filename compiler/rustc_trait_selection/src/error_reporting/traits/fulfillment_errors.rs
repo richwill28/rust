@@ -1798,7 +1798,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         let strip_references = |mut t: Ty<'tcx>| -> Ty<'tcx> {
             loop {
                 match t.kind() {
-                    ty::Ref(_, inner, _) | ty::RawPtr(inner, _) => t = *inner,
+                    ty::Ref(_, inner, _, _) | ty::RawPtr(inner, _) => t = *inner,
                     _ => break t,
                 }
             }

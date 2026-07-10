@@ -388,9 +388,14 @@ impl<'tcx> Analysis<'tcx> for MaybeInitializedPlaces<'_, 'tcx> {
         // Mark all places as "maybe init" if they are mutably borrowed. See #90752.
         if self.tcx.sess.opts.unstable_opts.precise_enum_drop_elaboration
             && let Some((_, rvalue)) = statement.kind.as_assign()
-            && let mir::Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, place)
+            && let Some(place) = match rvalue {
+                // TODO: Ignoring view should be sound but conservative. Investigate whether
+                // a view-aware analysis would enable better optimizations.
+                mir::Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, place, _view) => Some(place),
                 // FIXME: Does `&raw const foo` allow mutation? See #90413.
-                | mir::Rvalue::RawPtr(_, place) = rvalue
+                mir::Rvalue::RawPtr(_, place) => Some(place),
+                _ => None,
+            }
             && let LookupResult::Exact(mpi) = self.move_data().rev_lookup.find(place.as_ref())
         {
             on_all_children_bits(self.move_data(), mpi, |child| {

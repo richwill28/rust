@@ -57,7 +57,7 @@ pub fn type_allowed_to_implement_copy<'tcx>(
         | ty::Char
         | ty::RawPtr(..)
         | ty::Never
-        | ty::Ref(_, _, hir::Mutability::Not)
+        | ty::Ref(_, _, hir::Mutability::Not, _)
         | ty::Array(..) => return Ok(()),
 
         &ty::Adt(adt, args) => (adt, args),
@@ -110,7 +110,7 @@ pub fn type_allowed_to_implement_const_param_ty<'tcx>(
 
         // Handle types gated under `feature(unsized_const_params)`
         // FIXME(unsized_const_params): Make `const N: [u8]` work then forbid references
-        ty::Slice(inner_ty) | ty::Ref(_, inner_ty, Mutability::Not) => {
+        ty::Slice(inner_ty) | ty::Ref(_, inner_ty, Mutability::Not, _) => {
             need_unstable_feature_bound = true;
             vec![inner_ty]
         }

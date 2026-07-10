@@ -810,7 +810,7 @@ impl<'a, 'tcx> TypeVisitor<TyCtxt<'tcx>> for WfPredicates<'a, 'tcx> {
                 self.out.extend(obligations);
             }
 
-            ty::Ref(r, rty, _) => {
+            ty::Ref(r, rty, _, _) => {
                 // WfReference
                 if !r.has_escaping_bound_vars() && !rty.has_escaping_bound_vars() {
                     let cause = self.cause(ObligationCauseCode::ReferenceOutlivesReferent(t));

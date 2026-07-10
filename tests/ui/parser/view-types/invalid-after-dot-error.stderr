@@ -1,0 +1,38 @@
+error: expected field name or tuple index after '.' in view
+  --> $DIR/invalid-after-dot-error.rs:12:32
+   |
+LL | fn dot_then_keyword(n: &{point.if} Nested) {
+   |                                ^^ expected field name or tuple index after '.' for `point`
+   |
+   = help: use field names like `field` or tuple indices like `0`, `1`
+   = note: paths in view use dot notation to access nested fields, like `{field.subfield}` or `{0.1}`
+
+error: expected field name or tuple index after '.' in view
+  --> $DIR/invalid-after-dot-error.rs:16:31
+   |
+LL | fn dot_then_symbol(n: &{point.+} Nested) {
+   |                               ^ expected field name or tuple index after '.' for `point`
+   |
+   = help: use field names like `field` or tuple indices like `0`, `1`
+   = note: paths in view use dot notation to access nested fields, like `{field.subfield}` or `{0.1}`
+
+error: expected field name or tuple index after '.' in view
+  --> $DIR/invalid-after-dot-error.rs:20:31
+   |
+LL | fn dot_then_string(n: &{point."x"} Nested) {
+   |                               ^^^ expected a field identifier or numeric tuple index
+   |
+   = help: use field names like `field` or tuple indices like `0`, `1`
+   = note: paths in view use dot notation to access nested fields, like `{field.subfield}` or `{0.1}`
+
+error: expected field name or tuple index after '.' in view
+  --> $DIR/invalid-after-dot-error.rs:24:26
+   |
+LL | fn dot_at_end(n: &{point.} Nested) {
+   |                          ^ expected field name or tuple index after '.' for `point`
+   |
+   = help: use field names like `field` or tuple indices like `0`, `1`
+   = note: paths in view use dot notation to access nested fields, like `{field.subfield}` or `{0.1}`
+
+error: aborting due to 4 previous errors
+

@@ -178,7 +178,7 @@ impl<'tcx> Value<'tcx> {
     /// constants with types &str, &[u8], or [u8; _].
     pub fn try_to_raw_bytes(self, tcx: TyCtxt<'tcx>) -> Option<&'tcx [u8]> {
         match self.ty.kind() {
-            ty::Ref(_, inner_ty, _) => match inner_ty.kind() {
+            ty::Ref(_, inner_ty, _, _) => match inner_ty.kind() {
                 // `&str` can be interpreted as raw bytes
                 ty::Str => {}
                 // `&[u8]` can be interpreted as raw bytes

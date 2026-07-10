@@ -129,6 +129,18 @@ pub(crate) struct FnCtxt<'a, 'tcx> {
     /// Whether the current crate enables the `rustc_attrs` feature.
     /// This allows to skip processing attributes in many places.
     pub(super) has_rustc_attrs: bool,
+
+    /// View constraints for function parameters in the current function.
+    ///
+    /// Maps from `HirId` of function parameters to the view constraint that applies.
+    /// This is populated when type-checking function parameters with explicit view
+    /// type annotations (e.g., `fn foo(p: &{x} Point)`).
+    ///
+    /// TODO: Currently only function parameters are supported. Future work:
+    /// - Support view types in let bindings: `let x: &{x} Point = ...;`.
+    /// - Support view types in expressions: `&{x} expr`.
+    /// - Think about view subtyping: Should `&{x, y} T` coerce to `&{x} T`?
+    pub(super) view_constraints: RefCell<hir::HirIdMap<crate::view_types::ViewConstraint<'tcx>>>,
 }
 
 impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
@@ -158,6 +170,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             diverging_block_behavior,
             trait_ascriptions: Default::default(),
             has_rustc_attrs: root_ctxt.tcx.features().rustc_attrs(),
+            view_constraints: RefCell::new(Default::default()),
         }
     }
 

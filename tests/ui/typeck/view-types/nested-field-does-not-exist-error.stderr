@@ -1,0 +1,22 @@
+error: field `nonexistent` does not exist on struct
+  --> $DIR/nested-field-does-not-exist-error.rs:11:34
+   |
+LL | fn nested_field_wrong(o: &{inner.nonexistent} Outer) {
+   |                                  ^^^^^^^^^^^ field referenced in view
+   |
+   = note: available fields on this struct: value
+   = note: while resolving nested view field path: `inner.nonexistent`
+           the problematic component is: `nonexistent`
+
+error: field `wrong` does not exist on struct
+  --> $DIR/nested-field-does-not-exist-error.rs:15:27
+   |
+LL | fn first_level_wrong(o: &{wrong.value} Outer) {
+   |                           ^^^^^ field referenced in view
+   |
+   = note: available fields on this struct: inner
+   = note: while resolving nested view field path: `wrong.value`
+           the problematic component is: `wrong`
+
+error: aborting due to 2 previous errors
+

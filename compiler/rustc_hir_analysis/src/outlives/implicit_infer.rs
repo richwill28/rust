@@ -128,11 +128,15 @@ fn insert_required_predicates_to_be_wf<'tcx>(
         };
 
         match *leaf_ty.kind() {
-            ty::Ref(region, rty, _) => {
+            ty::Ref(region, rty, _, _) => {
                 // The type is `&'a T` which means that we will have
                 // a predicate requirement of `T: 'a` (`T` outlives `'a`).
                 //
                 // We also want to calculate potential predicates for the `T`.
+                //
+                // TODO: If we support per-field regions in views (e.g., `&{'a field1, 'b field2, ..} T`),
+                // we should adjust the predicate requirement here to account for field-specific lifetimes
+                // also, in addition to `T: 'a`.
                 debug!("Ref");
                 insert_outlives_predicate(tcx, rty.into(), region, span, required_predicates);
             }

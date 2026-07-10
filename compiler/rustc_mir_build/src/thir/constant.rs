@@ -33,7 +33,7 @@ pub(crate) fn lit_to_const<'tcx>(
     };
 
     let valtree = match (lit, ty.kind()) {
-        (ast::LitKind::Str(s, _), ty::Ref(_, inner_ty, _)) if inner_ty.is_str() => {
+        (ast::LitKind::Str(s, _), ty::Ref(_, inner_ty, _, _)) if inner_ty.is_str() => {
             let str_bytes = s.as_str().as_bytes();
             ty::ValTree::from_raw_bytes(tcx, str_bytes)
         }
@@ -43,7 +43,7 @@ pub(crate) fn lit_to_const<'tcx>(
             let str_bytes = s.as_str().as_bytes();
             ty::ValTree::from_raw_bytes(tcx, str_bytes)
         }
-        (ast::LitKind::ByteStr(byte_sym, _), ty::Ref(_, inner_ty, _))
+        (ast::LitKind::ByteStr(byte_sym, _), ty::Ref(_, inner_ty, _, _))
             if matches!(inner_ty.kind(), ty::Slice(_) | ty::Array(..)) =>
         {
             ty::ValTree::from_raw_bytes(tcx, byte_sym.as_byte_str())
@@ -58,7 +58,7 @@ pub(crate) fn lit_to_const<'tcx>(
         (ast::LitKind::Byte(n), ty::Uint(ty::UintTy::U8)) => {
             ty::ValTree::from_scalar_int(tcx, n.into())
         }
-        (ast::LitKind::CStr(byte_sym, _), ty::Ref(_, inner_ty, _)) if matches!(inner_ty.kind(), ty::Adt(def, _) if tcx.is_lang_item(def.did(), LangItem::CStr)) =>
+        (ast::LitKind::CStr(byte_sym, _), ty::Ref(_, inner_ty, _, _)) if matches!(inner_ty.kind(), ty::Adt(def, _) if tcx.is_lang_item(def.did(), LangItem::CStr)) =>
         {
             // A CStr is a newtype around a byte slice, so we create the inner slice here.
             // We need a branch for each "level" of the data structure.

@@ -727,13 +727,17 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                 write!(self, "*{} ", mutbl.ptr_str())?;
                 ty.print(self)?;
             }
-            ty::Ref(r, ty, mutbl) => {
+            ty::Ref(r, ty, mutbl, view) => {
                 write!(self, "&")?;
                 if self.should_print_optional_region(r) {
                     r.print(self)?;
                     write!(self, " ")?;
                 }
-                ty::TypeAndMut { ty, mutbl }.print(self)?;
+                write!(self, "{}", mutbl.prefix_str())?;
+                if let Some(view) = view {
+                    self.pretty_print_view(view)?;
+                }
+                ty.print(self)?;
             }
             ty::Never => write!(self, "!")?,
             ty::Tuple(tys) => {
@@ -1724,7 +1728,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
         let (prov, offset) = ptr.prov_and_relative_offset();
         match ty.kind() {
             // Byte strings (&[u8; N])
-            ty::Ref(_, inner, _) => {
+            ty::Ref(_, inner, _, _) => {
                 if let ty::Array(elem, ct_len) = inner.kind()
                     && let ty::Uint(ty::UintTy::U8) = elem.kind()
                     && let Some(len) = ct_len.try_to_target_usize(self.tcx())
@@ -1884,7 +1888,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
 
         let u8_type = self.tcx().types.u8;
         match (*cv.valtree, *cv.ty.kind()) {
-            (ty::ValTreeKind::Branch(_), ty::Ref(_, inner_ty, _)) => match inner_ty.kind() {
+            (ty::ValTreeKind::Branch(_), ty::Ref(_, inner_ty, _, _)) => match inner_ty.kind() {
                 ty::Slice(t) if *t == u8_type => {
                     let bytes = cv.try_to_raw_bytes(self.tcx()).unwrap_or_else(|| {
                         bug!(
@@ -1980,7 +1984,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                 }
                 return Ok(());
             }
-            (ty::ValTreeKind::Leaf(leaf), ty::Ref(_, inner_ty, _)) => {
+            (ty::ValTreeKind::Leaf(leaf), ty::Ref(_, inner_ty, _, _)) => {
                 write!(self, "&")?;
                 return self.pretty_print_const_scalar_int(*leaf, inner_ty, print_ty);
             }
@@ -2045,6 +2049,20 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             ty::BoundConstness::Const => write!(self, "const ")?,
             ty::BoundConstness::Maybe => write!(self, "[const] ")?,
         }
+        Ok(())
+    }
+
+    fn pretty_print_view(&mut self, view: ty::View<'tcx>) -> Result<(), PrintError> {
+        write!(self, "{{")?;
+        let mut first = true;
+        for field in view.iter() {
+            if !first {
+                write!(self, ", ")?;
+            }
+            first = false;
+            write!(self, "{}", field)?;
+        }
+        write!(self, "}} ")?;
         Ok(())
     }
 

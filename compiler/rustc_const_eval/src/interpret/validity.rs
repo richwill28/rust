@@ -739,7 +739,7 @@ impl<'rt, 'tcx, M: Machine<'tcx>> ValidityVisitor<'rt, 'tcx, M> {
                 }
                 interp_ok(true)
             }
-            ty::Ref(_, _ty, mutbl) => {
+            ty::Ref(_, _ty, mutbl, _) => {
                 self.check_safe_pointer(value, PointerKind::Ref(*mutbl))?;
                 interp_ok(true)
             }

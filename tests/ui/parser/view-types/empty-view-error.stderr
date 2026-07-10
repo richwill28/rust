@@ -1,0 +1,10 @@
+error: empty view is not allowed
+  --> $DIR/empty-view-error.rs:8:22
+   |
+LL | fn borrow_empty(_p: &{} Point) {
+   |                      ^^ view must contain at least one field
+   |
+   = help: specify which fields to borrow: `&{field} Type`
+
+error: aborting due to 1 previous error
+

@@ -165,7 +165,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                             block,
                             self.source_info(test.span),
                             ref_place,
-                            Rvalue::Ref(re_erased, BorrowKind::Shared, place),
+                            Rvalue::Ref(re_erased, BorrowKind::Shared, place, None),
                         );
                         place = ref_place;
                         cast_ty = ref_str_ty;
@@ -236,7 +236,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     // (Interestingly this means that exhaustiveness analysis relies, for soundness,
                     // on the `PartialEq` impl for `str` to b correct!)
                     match *cast_ty.kind() {
-                        ty::Ref(_, deref_ty, _) if deref_ty == self.tcx.types.str_ => {}
+                        ty::Ref(_, deref_ty, _, _) if deref_ty == self.tcx.types.str_ => {}
                         _ => {
                             span_bug!(
                                 source_info.span,
@@ -373,14 +373,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         let re_erased = self.tcx.lifetimes.re_erased;
         let trait_item = self.tcx.require_lang_item(trait_item, span);
         let method = trait_method(self.tcx, trait_item, method, [ty]);
-        let ref_src = self.temp(Ty::new_ref(self.tcx, re_erased, ty, mutability), span);
+        let ref_src = self.temp(Ty::new_ref(self.tcx, re_erased, ty, mutability, None), span);
         // `let ref_src = &src_place;`
         // or `let ref_src = &mut src_place;`
         self.cfg.push_assign(
             block,
             source_info,
             ref_src,
-            Rvalue::Ref(re_erased, borrow_kind, place),
+            Rvalue::Ref(re_erased, borrow_kind, place, None),
         );
         // `let temp = <Ty as Deref>::deref(ref_src);`
         // or `let temp = <Ty as DerefMut>::deref_mut(ref_src);`

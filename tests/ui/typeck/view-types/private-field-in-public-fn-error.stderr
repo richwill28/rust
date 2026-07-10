@@ -1,0 +1,12 @@
+error: view cannot expose private field `y` in public context
+  --> $DIR/private-field-in-public-fn-error.rs:13:28
+   |
+LL | pub fn expose_private(p: &{y} Point) {
+   |                            ^ private field in view
+   |
+   = note: field `y` is private in struct `Point`
+   = help: remove private fields from the view or make the function private
+   = note: public functions cannot expose private fields through views
+
+error: aborting due to 1 previous error
+

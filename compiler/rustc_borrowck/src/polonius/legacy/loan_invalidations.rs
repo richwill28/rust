@@ -4,7 +4,7 @@ use rustc_data_structures::graph::dominators::Dominators;
 use rustc_middle::bug;
 use rustc_middle::mir::visit::Visitor;
 use rustc_middle::mir::*;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{self, TyCtxt};
 use tracing::debug;
 
 use super::{PoloniusFacts, PoloniusLocationTable};
@@ -218,6 +218,43 @@ impl<'a, 'tcx> Visitor<'tcx> for LoanInvalidationsGenerator<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> LoanInvalidationsGenerator<'a, 'tcx> {
+    /// Resolves view fields to projected `Place`s, mirroring
+    /// `MirBorrowckCtxt::resolve_view_fields` in `lib.rs`.
+    fn resolve_view_fields(
+        &self,
+        place: Place<'tcx>,
+        view: View<'tcx>,
+    ) -> Option<Vec<(Place<'tcx>, BorrowKind)>> {
+        if view.is_empty() {
+            return None;
+        }
+        let tcx = self.tcx;
+        let body = self.body;
+        let base_ty = place.ty(body, tcx).ty;
+        let mut fields = Vec::with_capacity(view.len());
+        for vf in view.iter() {
+            let mut current_place = place;
+            let mut current_ty = base_ty;
+            for &field_name in vf.path.iter() {
+                let ty::Adt(adt_def, args) = current_ty.kind() else {
+                    return None;
+                };
+                if !adt_def.is_struct() {
+                    return None;
+                }
+                let variant = adt_def.non_enum_variant();
+                let (field_idx, field_def) =
+                    variant.fields.iter_enumerated().find(|(_, f)| f.name == field_name)?;
+                let field_ty = field_def.ty(tcx, args);
+                current_place = current_place
+                    .project_deeper(&[ProjectionElem::Field(field_idx, field_ty)], tcx);
+                current_ty = field_ty;
+            }
+            fields.push((current_place, vf.kind));
+        }
+        Some(fields)
+    }
+
     /// Simulates mutation of a place.
     fn mutate_place(&mut self, location: Location, place: Place<'tcx>, kind: AccessDepth) {
         self.access_place(
@@ -254,7 +291,11 @@ impl<'a, 'tcx> LoanInvalidationsGenerator<'a, 'tcx> {
     // Simulates consumption of an rvalue
     fn consume_rvalue(&mut self, location: Location, rvalue: &Rvalue<'tcx>) {
         match rvalue {
-            &Rvalue::Ref(_ /*rgn*/, bk, place) => {
+            // When a `Rvalue::Ref` carries a view (e.g. `&mut {mut a, b} *s`),
+            // decompose into per-field invalidation checks, mirroring the
+            // NLL path in `MirBorrowckCtxt::consume_rvalue` (lib.rs).
+            // See that function's comment for the full explanation.
+            &Rvalue::Ref(_ /*rgn*/, bk, place, view) => {
                 let access_kind = match bk {
                     BorrowKind::Fake(FakeBorrowKind::Shallow) => {
                         (Shallow(Some(ArtificialField::FakeBorrow)), Read(ReadKind::Borrow(bk)))
@@ -272,7 +313,25 @@ impl<'a, 'tcx> LoanInvalidationsGenerator<'a, 'tcx> {
                     }
                 };
 
-                self.access_place(location, place, access_kind, LocalMutationIsAllowed::No);
+                let per_field =
+                    view.and_then(|view| self.resolve_view_fields(place, view));
+
+                if let Some(field_accesses) = per_field {
+                    for (field_place, vf_kind) in field_accesses {
+                        let field_access = match vf_kind {
+                            BorrowKind::Mut { .. } => access_kind,
+                            _ => (Deep, Read(ReadKind::Borrow(BorrowKind::Shared))),
+                        };
+                        self.access_place(
+                            location,
+                            field_place,
+                            field_access,
+                            LocalMutationIsAllowed::No,
+                        );
+                    }
+                } else {
+                    self.access_place(location, place, access_kind, LocalMutationIsAllowed::No);
+                }
             }
 
             &Rvalue::RawPtr(kind, place) => {
@@ -417,7 +476,8 @@ impl<'a, 'tcx> LoanInvalidationsGenerator<'a, 'tcx> {
     fn check_activations(&mut self, location: Location) {
         // Two-phase borrow support: For each activation that is newly
         // generated at this statement, check if it interferes with
-        // another borrow.
+        // another borrow. Per-field decomposition mirrors `consume_rvalue`
+        // above and `MirBorrowckCtxt::check_activations` in `lib.rs`.
         for &borrow_index in self.borrow_set.activations_at_location(location) {
             let borrow = &self.borrow_set[borrow_index];
 
@@ -427,12 +487,34 @@ impl<'a, 'tcx> LoanInvalidationsGenerator<'a, 'tcx> {
                 BorrowKind::Mut { .. } => true,
             });
 
-            self.access_place(
-                location,
-                borrow.borrowed_place,
-                (Deep, Activation(WriteKind::MutableBorrow(borrow.kind), borrow_index)),
-                LocalMutationIsAllowed::No,
-            );
+            let activation_access =
+                (Deep, Activation(WriteKind::MutableBorrow(borrow.kind), borrow_index));
+
+            let per_field = borrow
+                .view
+                .and_then(|view| self.resolve_view_fields(borrow.borrowed_place, view));
+
+            if let Some(field_accesses) = per_field {
+                for (field_place, vf_kind) in field_accesses {
+                    let field_access = match vf_kind {
+                        BorrowKind::Mut { .. } => activation_access,
+                        _ => (Deep, Read(ReadKind::Borrow(BorrowKind::Shared))),
+                    };
+                    self.access_place(
+                        location,
+                        field_place,
+                        field_access,
+                        LocalMutationIsAllowed::No,
+                    );
+                }
+            } else {
+                self.access_place(
+                    location,
+                    borrow.borrowed_place,
+                    activation_access,
+                    LocalMutationIsAllowed::No,
+                );
+            }
 
             // We do not need to call `check_if_path_or_subpath_is_moved`
             // again, as we already called it when we made the

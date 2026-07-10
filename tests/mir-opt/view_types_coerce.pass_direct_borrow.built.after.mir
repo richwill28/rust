@@ -1,0 +1,37 @@
+// MIR for `pass_direct_borrow` after built
+
+fn pass_direct_borrow() -> () {
+    let mut _0: ();
+    let _1: MyStruct;
+    let _2: ();
+    let mut _3: &{field1} MyStruct;
+    let _4: &{field1} MyStruct;
+    scope 1 {
+        debug x => _1;
+    }
+
+    bb0: {
+        StorageLive(_1);
+        _1 = MyStruct { field1: const 10_i32, field2: const 20_i32 };
+        FakeRead(ForLet(None), _1);
+        StorageLive(_2);
+        StorageLive(_3);
+        StorageLive(_4);
+        _4 = &{field1} _1;
+        _3 = &{field1} (*_4);
+        _2 = take_view_ref(move _3) -> [return: bb1, unwind: bb2];
+    }
+
+    bb1: {
+        StorageDead(_3);
+        StorageDead(_4);
+        StorageDead(_2);
+        _0 = const ();
+        StorageDead(_1);
+        return;
+    }
+
+    bb2 (cleanup): {
+        resume;
+    }
+}

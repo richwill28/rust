@@ -358,7 +358,15 @@ pub(crate) mod rustc {
                     }
                 }
 
-                ty::Ref(region, ty, mutability) => {
+                // Region and mutability are tracked because they affect validity
+                // constraints on transmutation (e.g. `&T -> &mut T` violates aliasing
+                // rules, `&'a T -> &'static T` can create dangling references, etc.).
+                //
+                // TODO: View is currently ignored as it's a compile-time access control
+                // mechanism with no runtime representation. However, future work should
+                // study whether view-widening transmutations (e.g. `&{field} T -> &T`)
+                // should be restricted, similar to how mutability widening is prevented.
+                ty::Ref(region, ty, mutability, _view) => {
                     let layout = layout_of(cx, *ty)?;
                     let referent_align = layout.align.bytes_usize();
                     let referent_size = layout.size.bytes_usize();

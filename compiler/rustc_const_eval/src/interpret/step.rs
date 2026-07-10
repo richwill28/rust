@@ -216,7 +216,11 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                 self.write_repeat(operand, &dest)?;
             }
 
-            Ref(_, borrow_kind, place) => {
+            Ref(_, borrow_kind, place, _view) => {
+                // View is ignored. It's a type system feature that restricts field access in
+                // source code. The interpreter executes MIR that has already passed type checking,
+                // so field access restrictions were already enforced. Views don't affect the
+                // interpreter's execution semantics.
                 let src = self.eval_place(place)?;
                 let place = self.force_allocation(&src)?;
                 let val = ImmTy::from_immediate(place.to_ref(self), dest.layout);

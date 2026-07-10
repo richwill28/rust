@@ -171,11 +171,12 @@ pub(crate) fn coroutine_by_move_body_def_id<'tcx>(
             let mut parent_capture_ty = parent_capture.place.ty();
             parent_capture_ty = match parent_capture.info.capture_kind {
                 ty::UpvarCapture::ByValue | ty::UpvarCapture::ByUse => parent_capture_ty,
-                ty::UpvarCapture::ByRef(kind) => Ty::new_ref(
+                ty::UpvarCapture::ByRef(kind, view) => Ty::new_ref(
                     tcx,
                     tcx.lifetimes.re_erased,
                     parent_capture_ty,
                     kind.to_mutbl_lossy(),
+                    view,
                 ),
             };
 
@@ -347,7 +348,7 @@ impl<'tcx> MutVisitor<'tcx> for MakeByMoveBody<'tcx> {
         // don't need to borrowck by-move MIR bodies. But it's best to preserve
         // as much as we can between these two bodies :)
         if let mir::StatementKind::Assign(box (_, rvalue)) = &statement.kind
-            && let mir::Rvalue::Ref(_, mir::BorrowKind::Fake(mir::FakeBorrowKind::Shallow), place) =
+            && let mir::Rvalue::Ref(_, mir::BorrowKind::Fake(mir::FakeBorrowKind::Shallow), place, _) =
                 rvalue
             && let mir::PlaceRef {
                 local: ty::CAPTURE_STRUCT_LOCAL,

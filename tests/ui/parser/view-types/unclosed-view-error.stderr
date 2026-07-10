@@ -1,0 +1,20 @@
+error: mismatched closing delimiter: `)`
+  --> $DIR/unclosed-view-error.rs:8:22
+   |
+LL | fn missing_close(p: &{x Point) {
+   |                 -    ^       ^ mismatched closing delimiter
+   |                 |    |
+   |                 |    unclosed delimiter
+   |                 closing delimiter possibly meant for this
+
+error: mismatched closing delimiter: `)`
+  --> $DIR/unclosed-view-error.rs:12:31
+   |
+LL | fn missing_close_multiple(p: &{x, y Point) {
+   |                          -    ^          ^ mismatched closing delimiter
+   |                          |    |
+   |                          |    unclosed delimiter
+   |                          closing delimiter possibly meant for this
+
+error: aborting due to 2 previous errors
+

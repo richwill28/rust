@@ -317,6 +317,7 @@ fn dropee_emit_retag<'tcx>(
             tcx.lifetimes.re_erased,
             BorrowKind::Mut { kind: MutBorrowKind::Default },
             tcx.mk_place_deref(dropee_ptr),
+            None,
         );
         let ref_ty = reborrow.ty(body.local_decls(), tcx);
         dropee_ptr = body.local_decls.push(LocalDecl::new(ref_ty, span)).into();
@@ -666,7 +667,7 @@ impl<'tcx> CloneShimBuilder<'tcx> {
         // `let ref_loc: &ty = &src;`
         let statement = self.make_statement(StatementKind::Assign(Box::new((
             ref_loc,
-            Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Shared, src),
+            Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Shared, src, None),
         ))));
 
         // `let loc = Clone::clone(ref_loc);`
@@ -901,7 +902,7 @@ fn build_call_shim<'tcx>(
                 source_info,
                 StatementKind::Assign(Box::new((
                     Place::from(ref_rcvr),
-                    Rvalue::Ref(tcx.lifetimes.re_erased, borrow_kind, rcvr_place()),
+                    Rvalue::Ref(tcx.lifetimes.re_erased, borrow_kind, rcvr_place(), None),
                 ))),
             ));
             Operand::Move(Place::from(ref_rcvr))
@@ -1198,7 +1199,7 @@ fn build_construct_coroutine_by_move_shim<'tcx>(
             // The only situation where it's possible is when we capture immuatable references,
             // since those don't need to be reborrowed with the closure's env lifetime. Since
             // references are always `Copy`, just emit a copy.
-            if !matches!(ty.kind(), ty::Ref(_, _, hir::Mutability::Not)) {
+            if !matches!(ty.kind(), ty::Ref(_, _, hir::Mutability::Not, _)) {
                 // This copy is only sound if it's a `&T`. This may be
                 // reachable e.g. when eagerly computing the `Fn` instance
                 // of an async closure that doesn't borrowck.

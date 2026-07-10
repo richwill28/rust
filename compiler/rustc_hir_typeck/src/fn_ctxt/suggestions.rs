@@ -428,7 +428,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         if let Some((found_ty_inner, expected_ty_inner, error_tys)) =
             self.deconstruct_option_or_result(found, expected)
-            && let ty::Ref(_, peeled, hir::Mutability::Not) = *expected_ty_inner.kind()
+            && let ty::Ref(_, peeled, hir::Mutability::Not, _) = *expected_ty_inner.kind()
         {
             // Suggest removing any stray borrows (unless there's macro shenanigans involved).
             let inner_expr = expr.peel_borrows();
@@ -470,7 +470,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     borrow_removal_span,
                 });
                 return true;
-            } else if let ty::Ref(_, peeled_found_ty, _) = found_ty_inner.kind()
+            } else if let ty::Ref(_, peeled_found_ty, _, _) = found_ty_inner.kind()
                 && let ty::Adt(adt, _) = peeled_found_ty.peel_refs().kind()
                 && self.tcx.is_lang_item(adt.did(), LangItem::String)
                 && peeled.is_str()
@@ -1328,8 +1328,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             match (&expr.kind, expr_ty.kind(), expected_ty.kind()) {
                 (
                     hir::ExprKind::AddrOf(_, _, inner_expr),
-                    ty::Ref(_, inner_expr_ty, _),
-                    ty::Ref(_, inner_expected_ty, _),
+                    ty::Ref(_, inner_expr_ty, _, _),
+                    ty::Ref(_, inner_expected_ty, _, _),
                 ) => {
                     expr = *inner_expr;
                     expr_ty = *inner_expr_ty;
@@ -1351,7 +1351,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expr_ty: Ty<'tcx>,
         expected_ty: Ty<'tcx>,
     ) -> bool {
-        if let ty::Ref(_, inner_ty, hir::Mutability::Not) = expr_ty.kind()
+        if let ty::Ref(_, inner_ty, hir::Mutability::Not, _) = expr_ty.kind()
             && let Some(clone_trait_def) = self.tcx.lang_items().clone_trait()
             && expected_ty == *inner_ty
             && self
@@ -1404,7 +1404,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         {
             let expr_inner_ty = args.type_at(0);
             let expected_inner_ty = expected_args.type_at(0);
-            if let &ty::Ref(_, ty, _mutability) = expr_inner_ty.kind()
+            if let &ty::Ref(_, ty, _mutability, _) = expr_inner_ty.kind()
                 && self.can_eq(self.param_env, ty, expected_inner_ty)
             {
                 let def_path = self.tcx.def_path_str(adt_def.did());
@@ -1579,7 +1579,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return;
         }
 
-        let ty::Ref(_, peeled, _mutability) = provided_ty.kind() else {
+        let ty::Ref(_, peeled, _mutability, _) = provided_ty.kind() else {
             return;
         };
 
@@ -1887,7 +1887,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let Some(clone_trait_did) = self.tcx.lang_items().clone_trait() else {
             return;
         };
-        let ty::Ref(_, pointee_ty, _) = found_ty.kind() else { return };
+        let ty::Ref(_, pointee_ty, _, _) = found_ty.kind() else { return };
         let results = self.typeck_results.borrow();
         // First, look for a `Clone::clone` call
         if segment.ident.name == sym::clone
@@ -2720,7 +2720,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let expr = expr.peel_drop_temps();
 
         match (&expr.kind, expected.kind(), checked_ty.kind()) {
-            (_, &ty::Ref(_, exp, _), &ty::Ref(_, check, _)) => match (exp.kind(), check.kind()) {
+            (_, &ty::Ref(_, exp, _, _), &ty::Ref(_, check, _, _)) => match (exp.kind(), check.kind()) {
                 (&ty::Str, &ty::Array(arr, _) | &ty::Slice(arr)) if arr == self.tcx.types.u8 => {
                     if let hir::ExprKind::Lit(_) = expr.kind
                         && let Ok(src) = sm.span_to_snippet(sp)
@@ -2752,7 +2752,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 }
                 _ => {}
             },
-            (_, &ty::Ref(_, _, mutability), _) => {
+            (_, &ty::Ref(_, _, mutability, _), _) => {
                 // Check if it can work when put into a ref. For example:
                 //
                 // ```
@@ -2899,7 +2899,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     ));
                 }
             }
-            (hir::ExprKind::AddrOf(hir::BorrowKind::Ref, _, expr), _, &ty::Ref(_, checked, _))
+            (hir::ExprKind::AddrOf(hir::BorrowKind::Ref, _, expr), _, &ty::Ref(_, checked, _, _))
                 if self.can_eq(self.param_env, checked, expected) =>
             {
                 let make_sugg = |start: Span, end: BytePos| {
@@ -2938,7 +2938,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     return make_sugg(sp, expr.span.lo());
                 }
             }
-            (_, &ty::RawPtr(ty_b, mutbl_b), &ty::Ref(_, ty_a, mutbl_a)) => {
+            (_, &ty::RawPtr(ty_b, mutbl_b), &ty::Ref(_, ty_a, mutbl_a, _)) => {
                 if let Some(steps) = self.deref_steps_for_suggestion(ty_a, ty_b)
                     // Only suggest valid if dereferencing needed.
                     && steps > 0

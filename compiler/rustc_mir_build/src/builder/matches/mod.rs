@@ -2517,7 +2517,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             let re_erased = tcx.lifetimes.re_erased;
             let scrutinee_source_info = self.source_info(scrutinee_span);
             for &(place, temp, kind) in fake_borrows {
-                let borrow = Rvalue::Ref(re_erased, BorrowKind::Fake(kind), place);
+                let borrow = Rvalue::Ref(re_erased, BorrowKind::Fake(kind), place, None);
                 self.cfg.push_assign(block, scrutinee_source_info, Place::from(temp), borrow);
             }
 
@@ -2749,7 +2749,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 ByRef::No => {
                     // The arm binding will be by value, so for the guard binding
                     // just take a shared reference to the matched place.
-                    let rvalue = Rvalue::Ref(re_erased, BorrowKind::Shared, binding.source);
+                    let rvalue = Rvalue::Ref(re_erased, BorrowKind::Shared, binding.source, None);
                     self.cfg.push_assign(block, source_info, ref_for_guard, rvalue);
                 }
                 ByRef::Yes(pinnedness, mutbl) => {
@@ -2764,7 +2764,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     );
 
                     let rvalue =
-                        Rvalue::Ref(re_erased, util::ref_pat_borrow_kind(mutbl), binding.source);
+                        Rvalue::Ref(re_erased, util::ref_pat_borrow_kind(mutbl), binding.source, None);
                     let rvalue = match pinnedness {
                         ty::Pinnedness::Not => rvalue,
                         ty::Pinnedness::Pinned => {
@@ -2773,7 +2773,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     };
                     self.cfg.push_assign(block, source_info, value_for_arm, rvalue);
                     // For the guard binding, take a shared reference to that reference.
-                    let rvalue = Rvalue::Ref(re_erased, BorrowKind::Shared, value_for_arm);
+                    let rvalue = Rvalue::Ref(re_erased, BorrowKind::Shared, value_for_arm, None);
                     self.cfg.push_assign(block, source_info, ref_for_guard, rvalue);
                 }
             }
@@ -2809,7 +2809,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 ByRef::No => Rvalue::Use(self.consume_by_copy_or_move(binding.source)),
                 ByRef::Yes(pinnedness, mutbl) => {
                     let rvalue =
-                        Rvalue::Ref(re_erased, util::ref_pat_borrow_kind(mutbl), binding.source);
+                        Rvalue::Ref(re_erased, util::ref_pat_borrow_kind(mutbl), binding.source, None);
                     match pinnedness {
                         ty::Pinnedness::Not => rvalue,
                         ty::Pinnedness::Pinned => {

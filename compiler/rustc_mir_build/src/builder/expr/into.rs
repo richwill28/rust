@@ -426,7 +426,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                         block,
                         source_info,
                         ref_place,
-                        Rvalue::Ref(this.tcx.lifetimes.re_erased, BorrowKind::Shared, place),
+                        Rvalue::Ref(this.tcx.lifetimes.re_erased, BorrowKind::Shared, place, None),
                     );
                     this.cfg.terminate(
                         block,
@@ -454,7 +454,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 }
             }
             ExprKind::Use { source } => this.expr_into_dest(destination, block, source),
-            ExprKind::Borrow { arg, borrow_kind } => {
+            ExprKind::Borrow { arg, borrow_kind, view } => {
                 // We don't do this in `as_rvalue` because we use `as_place`
                 // for borrow expressions, so we cannot create an `RValue` that
                 // remains valid across user code. `as_rvalue` is usually called
@@ -466,7 +466,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     }
                     _ => unpack!(block = this.as_place(block, arg)),
                 };
-                let borrow = Rvalue::Ref(this.tcx.lifetimes.re_erased, borrow_kind, arg_place);
+                let borrow = Rvalue::Ref(this.tcx.lifetimes.re_erased, borrow_kind, arg_place, view);
                 this.cfg.push_assign(block, source_info, destination, borrow);
                 block.unit()
             }

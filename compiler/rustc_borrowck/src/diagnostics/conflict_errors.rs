@@ -448,7 +448,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                     // for example:
                     // struct Y(u32);
                     // x's type is '& mut Y' and it is used in `fn generic<T>(x: T) {}`.
-                    if let ty::Ref(_, _, hir::Mutability::Mut) = ty.kind()
+                    if let ty::Ref(_, _, hir::Mutability::Mut, _view) = ty.kind()
                         && arg_param.is_some()
                     {
                         *has_suggest_reborrow = true;
@@ -671,7 +671,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         // Try borrowing a shared reference first, then mutably.
         if let Some(mutbl) = [ty::Mutability::Not, ty::Mutability::Mut].into_iter().find(|&mutbl| {
             let re = self.infcx.tcx.lifetimes.re_erased;
-            let ref_ty = Ty::new_ref(self.infcx.tcx, re, moved_arg_ty, mutbl);
+            let ref_ty = Ty::new_ref(self.infcx.tcx, re, moved_arg_ty, mutbl, None);
 
             // Ensure that substituting `ref_ty` in the callee's signature doesn't break
             // other inputs or the return type.
@@ -1583,11 +1583,13 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
             } else if typeck_results.expr_adjustments(expr).first().is_some_and(|adj| {
                 matches!(
                     adj.kind,
+                    // View is not relevant for this adjustment pattern.
                     ty::adjustment::Adjust::Borrow(ty::adjustment::AutoBorrow::Ref(
                         ty::adjustment::AutoBorrowMutability::Not
                             | ty::adjustment::AutoBorrowMutability::Mut {
                                 allow_two_phase_borrow: ty::adjustment::AllowTwoPhase::No
-                            }
+                            },
+                        _
                     ))
                 )
             }) && let Some(ty) = typeck_results.expr_ty_opt(expr)
@@ -1934,8 +1936,146 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
 
         self.suggest_using_local_if_applicable(&mut err, location, issued_borrow, explanation);
         self.suggest_copy_for_type_in_cloned_ref(&mut err, place);
+        self.add_view_type_conflict_note(&mut err, location, issued_borrow);
 
         err
+    }
+
+    /// If the conflict involves view type borrows, adds a note highlighting the
+    /// two conflicting parameters in the called function's signature.
+    fn add_view_type_conflict_note(
+        &self,
+        err: &mut Diag<'infcx>,
+        location: Location,
+        issued_borrow: &BorrowData<'tcx>,
+    ) {
+        if issued_borrow.view.is_none() {
+            return;
+        }
+
+        let tcx = self.infcx.tcx;
+
+        // Find the call terminator in the current block to identify the function.
+        let terminator = self.body[location.block].terminator();
+        let TerminatorKind::Call { func, .. } = &terminator.kind else { return };
+        let Some((def_id, _)) = func.const_fn_def() else { return };
+
+        // Get the function's type signature.
+        let fn_sig = tcx.fn_sig(def_id).instantiate_identity().skip_binder();
+
+        // Collect parameters that have view-type references, along with their index.
+        struct ViewParam<'tcx> {
+            idx: usize,
+            view: ty::View<'tcx>,
+        }
+        let mut view_params: Vec<ViewParam<'tcx>> = Vec::new();
+
+        for (idx, &param_ty) in fn_sig.inputs().iter().enumerate() {
+            if let ty::Ref(_, _, _, Some(view)) = *param_ty.kind() {
+                view_params.push(ViewParam { idx, view });
+            }
+        }
+
+        if view_params.len() < 2 {
+            return;
+        }
+
+        // Try to get per-parameter HIR spans for the called function (only for local defs).
+        let param_spans: Option<Vec<rustc_span::Span>> = def_id.as_local().and_then(|local_id| {
+            let node = tcx.hir_node_by_def_id(local_id);
+            let body_id = node.body_id()?;
+            let body = tcx.hir_body(body_id);
+            Some(body.params.iter().map(|p| p.span).collect())
+        });
+
+        // Find overlapping paths between view parameter pairs.
+        struct Conflict {
+            idx_a: usize,
+            idx_b: usize,
+            label_a: String,
+            label_b: String,
+        }
+        let mut conflicts: Vec<Conflict> = Vec::new();
+
+        for i in 0..view_params.len() {
+            for j in (i + 1)..view_params.len() {
+                let pa = &view_params[i];
+                let pb = &view_params[j];
+
+                for field_a in pa.view.iter() {
+                    for field_b in pb.view.iter() {
+                        let a_path = field_a.path;
+                        let b_path = field_b.path;
+                        // Bidirectional prefix match.
+                        let overlaps = if a_path.len() <= b_path.len() {
+                            b_path[..a_path.len()] == *a_path
+                        } else {
+                            a_path[..b_path.len()] == *b_path
+                        };
+                        // Two shared borrows on the same path don't conflict.
+                        if overlaps
+                            && (field_a.mutbl.is_mut() || field_b.mutbl.is_mut())
+                        {
+                            let path_str = a_path
+                                .iter()
+                                .map(|s| s.to_string())
+                                .collect::<Vec<_>>()
+                                .join(".");
+                            let kind_a =
+                                if field_a.mutbl.is_mut() { "mutably" } else { "immutably" };
+                            let kind_b =
+                                if field_b.mutbl.is_mut() { "mutably" } else { "immutably" };
+                            conflicts.push(Conflict {
+                                idx_a: pa.idx,
+                                idx_b: pb.idx,
+                                label_a: format!(
+                                    "borrows path `{}` {}",
+                                    path_str, kind_a,
+                                ),
+                                label_b: format!(
+                                    "borrows path `{}` {}",
+                                    path_str, kind_b,
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if conflicts.is_empty() {
+            return;
+        }
+
+        let fn_name = tcx.item_name(def_id);
+
+        for conflict in &conflicts {
+            if let Some(ref spans) = param_spans
+                && let Some(&span_a) = spans.get(conflict.idx_a)
+                && let Some(&span_b) = spans.get(conflict.idx_b)
+            {
+                // Only span_b is primary (rendered with ^, label inline to the right).
+                // span_a is secondary (rendered with -, label below via |).
+                let mut multi_span = MultiSpan::from_span(span_b);
+                multi_span.push_span_label(span_a, conflict.label_a.clone());
+                multi_span.push_span_label(span_b, conflict.label_b.clone());
+                err.span_note(
+                    multi_span,
+                    format!("function `{fn_name}` has parameters with conflicting borrows"),
+                );
+            } else {
+                // Fallback for non-local functions: point at the function definition.
+                let fn_span = tcx.def_span(def_id);
+                err.span_note(
+                    fn_span,
+                    format!("function `{fn_name}` has parameters with conflicting borrows"),
+                );
+                err.note(format!(
+                    "{} and {}",
+                    conflict.label_a, conflict.label_b,
+                ));
+            }
+        }
     }
 
     fn suggest_copy_for_type_in_cloned_ref(&self, err: &mut Diag<'infcx>, place: Place<'tcx>) {
@@ -1995,7 +2135,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 && let Some(rcvr_ty) = typeck_results.node_type_opt(rcvr.hir_id)
                 && let Some(ty) = typeck_results.node_type_opt(expr.hir_id)
                 && rcvr_ty == ty
-                && let ty::Ref(_, inner, _) = rcvr_ty.kind()
+                // View is not relevant.
+                && let ty::Ref(_, inner, _, _view) = rcvr_ty.kind()
                 && let inner = inner.peel_refs()
                 && (Holds { ty: inner }).visit_ty(local_ty).is_break()
                 && let None =
@@ -4154,7 +4295,8 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
 
                     // Otherwise, look at other types of assignment.
                     let assigned_from = match rvalue {
-                        Rvalue::Ref(_, _, assigned_from) => assigned_from,
+                        // View is not relevant.
+                        Rvalue::Ref(_, _, assigned_from, _view) => assigned_from,
                         Rvalue::Use(operand) => match operand {
                             Operand::Copy(assigned_from) | Operand::Move(assigned_from) => {
                                 assigned_from
@@ -4285,21 +4427,21 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         //    anything.
         let return_ty = sig.output();
         match return_ty.skip_binder().kind() {
-            ty::Ref(return_region, _, _)
+            ty::Ref(return_region, _, _, _view)
                 if return_region.is_named(self.infcx.tcx) && !is_closure =>
             {
                 // This is case 1 from above, return type is a named reference so we need to
                 // search for relevant arguments.
                 let mut arguments = Vec::new();
                 for (index, argument) in sig.inputs().skip_binder().iter().enumerate() {
-                    if let ty::Ref(argument_region, _, _) = argument.kind()
+                    if let ty::Ref(argument_region, _, _, _view) = argument.kind()
                         && argument_region == return_region
                     {
                         // Need to use the `rustc_middle::ty` types to compare against the
                         // `return_region`. Then use the `rustc_hir` type to get only
                         // the lifetime span.
                         match &fn_decl.inputs[index].kind {
-                            hir::TyKind::Ref(lifetime, _) => {
+                            hir::TyKind::Ref(lifetime, _, _) => {
                                 // With access to the lifetime, we can get
                                 // the span of it.
                                 arguments.push((*argument, lifetime.ident.span));
@@ -4314,7 +4456,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                                         .hir_node_by_def_id(alias_to)
                                         .expect_item()
                                         .expect_impl()
-                                    && let hir::TyKind::Ref(lifetime, _) = self_ty.kind
+                                    && let hir::TyKind::Ref(lifetime, _, _) = self_ty.kind
                                 {
                                     arguments.push((*argument, lifetime.ident.span));
                                 }
@@ -4336,7 +4478,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 let return_ty = sig.output().skip_binder();
                 let mut return_span = fn_decl.output.span();
                 if let hir::FnRetTy::Return(ty) = &fn_decl.output
-                    && let hir::TyKind::Ref(lifetime, _) = ty.kind
+                    && let hir::TyKind::Ref(lifetime, _, _) = ty.kind
                 {
                     return_span = lifetime.ident.span;
                 }
@@ -4347,7 +4489,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                     return_span,
                 })
             }
-            ty::Ref(_, _, _) if is_closure => {
+            ty::Ref(_, _, _, _view) if is_closure => {
                 // This is case 2 from above but only for closures, return type is anonymous
                 // reference so we select
                 // the first argument.
@@ -4358,7 +4500,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 // from that.
                 if let ty::Tuple(elems) = argument_ty.kind() {
                     let &argument_ty = elems.first()?;
-                    if let ty::Ref(_, _, _) = argument_ty.kind() {
+                    if let ty::Ref(_, _, _, _view) = argument_ty.kind() {
                         return Some(AnnotatedBorrowFnSignature::Closure {
                             argument_ty,
                             argument_span,
@@ -4368,7 +4510,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
 
                 None
             }
-            ty::Ref(_, _, _) => {
+            ty::Ref(_, _, _, _view) => {
                 // This is also case 2 from above but for functions, return type is still an
                 // anonymous reference so we select the first argument.
                 let argument_span = fn_decl.inputs.first()?.span;
@@ -4379,7 +4521,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
 
                 // We expect the first argument to be a reference.
                 match argument_ty.kind() {
-                    ty::Ref(_, _, _) => {}
+                    ty::Ref(_, _, _, _view) => {}
                     _ => return None,
                 }
 

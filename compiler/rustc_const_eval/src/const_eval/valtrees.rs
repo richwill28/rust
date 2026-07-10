@@ -133,7 +133,7 @@ fn const_to_valtree_inner<'tcx>(
         // agree with runtime equality tests.
         ty::FnPtr(..) => Err(ValTreeCreationError::NonSupportedType(ty)),
 
-        ty::Ref(_, _, _)  => {
+        ty::Ref(_, _, _, _)  => {
             let derefd_place = ecx.deref_pointer(place).report_err()?;
             const_to_valtree_inner(ecx, &derefd_place, num_nodes)
         }
@@ -280,7 +280,7 @@ pub fn valtree_to_const_value<'tcx>(
             let cv = ty::Value { valtree: cv.valtree, ty };
             valtree_to_const_value(tcx, typing_env, cv)
         }
-        ty::Ref(_, inner_ty, _) => {
+        ty::Ref(_, inner_ty, _, _) => {
             let mut ecx =
                 mk_eval_cx_to_read_const_val(tcx, DUMMY_SP, typing_env, CanAccessMutGlobal::No);
             let imm = valtree_to_ref(&mut ecx, cv.valtree, inner_ty);
@@ -385,7 +385,7 @@ fn valtree_into_mplace<'tcx>(
             debug!("writing trivial valtree {:?} to place {:?}", scalar_int, place);
             ecx.write_immediate(Immediate::Scalar(scalar_int.into()), place).unwrap();
         }
-        ty::Ref(_, inner_ty, _) => {
+        ty::Ref(_, inner_ty, _, _) => {
             let imm = valtree_to_ref(ecx, valtree, *inner_ty);
             debug!(?imm);
             ecx.write_immediate(imm, place).unwrap();

@@ -26,7 +26,7 @@ use rustc_infer::infer::{self, DefineOpaqueTypes, InferOk, RegionVariableOrigin}
 use rustc_infer::traits::query::NoSolution;
 use rustc_middle::ty::adjustment::{Adjust, Adjustment, AllowTwoPhase};
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
-use rustc_middle::ty::{self, AdtKind, GenericArgsRef, Ty, TypeVisitableExt};
+use rustc_middle::ty::{self, AdtKind, GenericArgsRef, Ty, TypeVisitableExt, is_view_more_permissive};
 use rustc_middle::{bug, span_bug};
 use rustc_session::errors::ExprParenthesesNeeded;
 use rustc_session::parse::feature_err;
@@ -674,9 +674,51 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Expectation<'tcx>,
         expr: &'tcx hir::Expr<'tcx>,
     ) -> Ty<'tcx> {
+        // TODO: Support view types in borrow expressions.
+        //
+        // Currently, view types only work in function parameters:
+        //   fn foo(p: &{x} Point) { p.x; }  // OK
+        //
+        // We want to support them in borrow expressions:
+        //   let p: &Point = ...;
+        //   let q = &{x} *p;  // Create a reference that only allows accessing field x
+        //   q.x;              // OK
+        //   q.y;              // ERROR: field y not in view
+        //
+        // Implementation tasks:
+        //
+        // 1. **Check for view annotation**: Determine whether this borrow expression has
+        //    a view constraint (the `{x}` part in `&{x} *p`).
+        // 2. **Extract and validate the view**: Get the list of field identifiers from the
+        //    view annotation. Type-check the operand to determine its type, then validate
+        //    that all specified fields exist in that type's definition.
+        // 3. **Return the appropriate type**: Construct and return a type that captures
+        //    the reference with its view constraint. This type will be used during field
+        //    access checking to enforce the view restriction.
+        // 4. **View subtyping/coercion**: Should `&{x, y} T` be usable where `&{x} T` is
+        //    expected? This would be analogous to how `&mut T` can coerce to `&T`.
+
+        // Extract view from expected type to avoid creating borrows that are too wide.
+        // When the expected type is `&{view} T`, we directly create `&{view} x` instead of
+        // creating `&x` (which borrows all fields) and then coercing to `&{view} *(&x)`.
+        let expected_view = expected.only_has_type(self).and_then(|ty| {
+            match self.try_structurally_resolve_type(expr.span, ty).kind() {
+                ty::Ref(_, _, expected_mutbl, view) => {
+                    // Only use the view if mutability is compatible.
+                    // We're permissive here since coercion can still narrow &mut to &.
+                    if mutbl >= *expected_mutbl {
+                        *view
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        });
+
         let hint = expected.only_has_type(self).map_or(NoExpectation, |ty| {
             match self.try_structurally_resolve_type(expr.span, ty).kind() {
-                ty::Ref(_, ty, _) | ty::RawPtr(ty, _) => {
+                ty::Ref(_, ty, _, _) | ty::RawPtr(ty, _) => {
                     if oprnd.is_syntactic_place_expr() {
                         // Places may legitimately have unsized types.
                         // For example, dereferences of a wide pointer and
@@ -693,6 +735,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self.check_expr_with_expectation_and_needs(oprnd, hint, Needs::maybe_mut_place(mutbl));
         if let Err(guar) = ty.error_reported() {
             return Ty::new_error(self.tcx, guar);
+        }
+
+        // Check view constraints on field accesses in the operand.
+        if let hir::ExprKind::Field(..) = oprnd.kind {
+            if let Err(guar) = self.check_field_access_satisfies_view(oprnd) {
+                return Ty::new_error(self.tcx, guar);
+            }
         }
 
         match kind {
@@ -716,8 +765,42 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // whose address was taken can actually be made to live as long
                 // as it needs to live.
                 let region = self.next_region_var(RegionVariableOrigin::BorrowRegion(expr.span));
+
+                // If the operand is a deref of a view reference (`&*rx` where `rx: &{v} T`),
+                // restrict the new borrow to at most the source view to prevent "widening".
+                //
+                // For example, given `rx: &{x} Data`, `&*rx` must produce at most `&{x} Data`
+                // and never `&Data`, because that would grant access to field `y` which the
+                // caller of this function never had permission to borrow.
+                //
+                // The rule:
+                //   - If no explicit view was requested (expected_view = None), inherit the
+                //     source view so the result is `&{src_view} T` rather than `&T`.
+                //   - If an explicit view was requested that is narrower-or-equal to the source
+                //     view, use it (the caller is requesting fewer permissions which is fine).
+                //   - If an explicit view was requested that is *wider* than the source view,
+                //     still use the source view so that the subsequent coercion check detects
+                //     and rejects the widening attempt.
+                let deref_src_view =
+                    if let hir::ExprKind::Unary(hir::UnOp::Deref, inner_expr) = &oprnd.kind {
+                        let inner_ty = self.typeck_results.borrow().node_type(inner_expr.hir_id);
+                        if let ty::Ref(_, _, _, Some(view)) = inner_ty.kind() { Some(*view) } else { None }
+                    } else {
+                        None
+                    };
+
+                let effective_view = match (deref_src_view, expected_view) {
+                    (None, _) => expected_view,
+                    (Some(src), None) => Some(src),
+                    (Some(src), Some(exp)) if is_view_more_permissive(src, exp) => expected_view,
+                    (Some(src), Some(_)) => Some(src),
+                };
+
                 match kind {
-                    hir::BorrowKind::Ref => Ty::new_ref(self.tcx, region, ty, mutbl),
+                    // Use the effective view directly to avoid creating borrows that are too wide.
+                    // This makes `&x` typed as `&{view} x` when a view type is expected,
+                    // avoiding the need to first create `&x` then narrow via reborrow.
+                    hir::BorrowKind::Ref => Ty::new_ref(self.tcx, region, ty, mutbl, effective_view),
                     hir::BorrowKind::Pin => Ty::new_pinned_ref(self.tcx, region, ty, mutbl),
                     _ => unreachable!(),
                 }
@@ -1168,6 +1251,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let ret_ty = ret_coercion.borrow().expected_ty();
         let return_expr_ty = self.check_expr_with_hint(return_expr, ret_ty);
+        // TODO: If the return type has a view constraint, verify that `return_expr` satisfies it.
+        // This should check that the returned expression only exposes the fields allowed by the view.
         let mut span = return_expr.span;
         let mut hir_id = return_expr.hir_id;
         // Use the span of the trailing expression for our cause,
@@ -2916,6 +3001,21 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let base_ty = self.check_expr(base);
         let base_ty = self.structurally_resolve_type(base.span, base_ty);
 
+        // Check view constraints, but only on the outermost field access in a chain.
+        // For a chain like `r.a.b`, the HIR is Field(Field(r, a), b). When processing
+        // the inner Field(r, a), its parent is another Field, the check must be skipped
+        // there because the access path would be the incomplete [a], which may not satisfy
+        // a view like {a.b}. The check on the outer Field(r.a, b) produces the full
+        // path [a, b] and makes the correct decision.
+        if !matches!(
+            self.tcx.parent_hir_node(expr.hir_id),
+            hir::Node::Expr(hir::Expr { kind: hir::ExprKind::Field(..), .. })
+        ) {
+            if let Err(guar) = self.check_field_access_satisfies_view(expr) {
+                return Ty::new_error(self.tcx, guar);
+            }
+        }
+
         // Whether we are trying to access a private field. Used for error reporting.
         let mut private_candidate = None;
 
@@ -3818,7 +3918,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     let fnptr_ty = Ty::new_fn_ptr(self.tcx, ty.fn_sig(self.tcx));
                     self.demand_coerce(expr, ty, fnptr_ty, None, AllowTwoPhase::No);
                 }
-                ty::Ref(_, base_ty, mutbl) => {
+                ty::Ref(_, base_ty, mutbl, _) => {
                     let ptr_ty = Ty::new_ptr(self.tcx, base_ty, mutbl);
                     self.demand_coerce(expr, ty, ptr_ty, None, AllowTwoPhase::No);
                 }

@@ -289,7 +289,7 @@ fn build_error_for_const_call<'tcx>(
                         {
                             let mut num_refs = 0;
                             let mut tmp_ty = self_ty;
-                            while let rustc_middle::ty::Ref(_, inner_ty, _) = tmp_ty.kind() {
+                            while let rustc_middle::ty::Ref(_, inner_ty, _, _) = tmp_ty.kind() {
                                 num_refs += 1;
                                 tmp_ty = *inner_ty;
                             }

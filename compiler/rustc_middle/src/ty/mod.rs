@@ -100,7 +100,8 @@ pub use self::region::{
 pub use self::sty::{
     AliasTy, Article, Binder, BoundTy, BoundTyKind, BoundVariableKind, CanonicalPolyFnSig,
     CoroutineArgsExt, EarlyBinder, FnSig, InlineConstArgs, InlineConstArgsParts, ParamConst,
-    ParamTy, PolyFnSig, TyKind, TypeAndMut, TypingMode, UpvarArgs,
+    ParamTy, PolyFnSig, TyKind, TypeAndMut, TypingMode, UpvarArgs, View, ViewField,
+    get_maximal_view, is_view_more_permissive, semantically_equivalent_view,
 };
 pub use self::trait_def::TraitDef;
 pub use self::typeck_results::{
